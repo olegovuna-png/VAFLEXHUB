@@ -1381,9 +1381,6 @@ do
         DesyncRealAngularVelocity = nil,
         DesyncRealHumanoidState = nil,
 
-        DesyncCamera = nil,
-        DesyncCameraRelative = nil,
-
         DesyncSpoofVelocity = Vector3.zero,
         DesyncSpoofCFrame = nil,
         DesyncSpoofed = false,
@@ -1533,13 +1530,6 @@ do
             end)
         end
 
-        local camera = defenseState.DesyncCamera
-        if camera and camera.Parent and defenseState.DesyncRealCFrame and defenseState.DesyncCameraRelative then
-            pcall(function()
-                camera.CFrame = defenseState.DesyncRealCFrame * defenseState.DesyncCameraRelative
-            end)
-        end
-
         defenseState.DesyncSpoofed = false
     end
 
@@ -1551,7 +1541,9 @@ do
             defenseState.DesyncStep = nil
         end
         if defenseState.DesyncRestore then
-            defenseState.DesyncRestore:Disconnect()
+            pcall(function()
+                RunService:UnbindFromRenderStep(defenseState.DesyncRestore)
+            end)
             defenseState.DesyncRestore = nil
         end
 
@@ -1562,8 +1554,6 @@ do
         defenseState.DesyncRealVelocity = nil
         defenseState.DesyncRealAngularVelocity = nil
         defenseState.DesyncRealHumanoidState = nil
-        defenseState.DesyncCamera = nil
-        defenseState.DesyncCameraRelative = nil
         defenseState.DesyncSpoofVelocity = Vector3.zero
         defenseState.DesyncSpoofCFrame = nil
         defenseState.DesyncSpoofed = false
@@ -1635,15 +1625,6 @@ do
             end)
             defenseState.DesyncRealHumanoidState = okState and stateNow or nil
 
-            local camera = Workspace.CurrentCamera
-            defenseState.DesyncCamera = camera
-            defenseState.DesyncCameraRelative = nil
-            if camera then
-                pcall(function()
-                    defenseState.DesyncCameraRelative = realCFrame:ToObjectSpace(camera.CFrame)
-                end)
-            end
-
             local spoofVelocity, baseOffset = phaseData(os.clock())
 
             -- When standing still, position samples are the strongest fallback in
@@ -1680,22 +1661,36 @@ do
             end)
         end)
 
-        local restoreSignal = RunService.PreRender or RunService.RenderStepped
-        defenseState.DesyncRestore = restoreSignal:Connect(function()
-            if not Running or not Config.DesyncAntiAimEnabled then
-                restoreAntiAim()
-                return
-            end
+        local restoreBindName = "VAFLEX_AntiAim_PreCameraRestore"
 
-            if defenseState.DesyncCharacter ~= LocalPlayer.Character then
-                restoreAntiAim()
-                defenseState.DesyncCharacter = nil
-                defenseState.DesyncRoot = nil
-                return
-            end
-
-            restoreAntiAim()
+        pcall(function()
+            RunService:UnbindFromRenderStep(restoreBindName)
         end)
+
+        defenseState.DesyncRestore = restoreBindName
+
+        -- Restore the real character one render-priority step BEFORE Roblox's
+        -- default camera runs. This keeps the anti-aim spoof in the physics /
+        -- replication phase, but the camera always calculates from the real body.
+        RunService:BindToRenderStep(
+            restoreBindName,
+            Enum.RenderPriority.Camera.Value - 1,
+            function()
+                if not Running or not Config.DesyncAntiAimEnabled then
+                    restoreAntiAim()
+                    return
+                end
+
+                if defenseState.DesyncCharacter ~= LocalPlayer.Character then
+                    restoreAntiAim()
+                    defenseState.DesyncCharacter = nil
+                    defenseState.DesyncRoot = nil
+                    return
+                end
+
+                restoreAntiAim()
+            end
+        )
 
         if UIControls.DefenseStatus then
             UIControls.DefenseStatus.Text = "Anti Aim enabled"

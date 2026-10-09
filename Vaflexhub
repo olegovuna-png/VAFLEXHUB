@@ -2531,7 +2531,7 @@ UIControls.SetupMyESPSection = function()
         Position = UDim2.fromOffset(13, 0),
         Size = UDim2.new(1, -80, 1, 0),
         BackgroundTransparency = 1,
-        Text = "Show Ping Hitbox",
+        Text = "Show Network Hitbox",
         TextColor3 = Config.Text,
         TextSize = 10,
         Font = Enum.Font.GothamSemibold,
@@ -2553,7 +2553,7 @@ UIControls.SetupMyESPSection = function()
         Position = UDim2.fromOffset(10, 103),
         Size = UDim2.new(1, -20, 0, 34),
         BackgroundTransparency = 1,
-        Text = "Ping estimate: unavailable",
+        Text = "Network estimate: unavailable",
         TextColor3 = Config.Muted,
         TextSize = 7,
         Font = Enum.Font.Gotham,
@@ -2565,10 +2565,13 @@ UIControls.SetupMyESPSection = function()
     positionLabel.Parent = body
     UIControls.MyHitboxPositionLabel = positionLabel
 
-    UIControls.MyHitboxHistory = UIControls.MyHitboxHistory or {}
+    -- This buffer stores the positions that VAFLEX actually presents during the
+    -- physics / replication phase. When Anti Aim is enabled this is the spoofed
+    -- CFrame; otherwise it is the normal root CFrame.
+    UIControls.NetworkHitboxHistory = UIControls.NetworkHitboxHistory or {}
 
     local function clearHistory()
-        table.clear(UIControls.MyHitboxHistory)
+        table.clear(UIControls.NetworkHitboxHistory)
     end
 
     local function bodyPartAllowed(part, character)
@@ -2590,21 +2593,6 @@ UIControls.SetupMyESPSection = function()
         return list
     end
 
-    local function pushHistory(root)
-        local history = UIControls.MyHitboxHistory
-        local now = os.clock()
-
-        history[#history + 1] = {
-            Time = now,
-            CFrame = root.CFrame,
-        }
-
-        local cutoff = now - 1.5
-        while #history > 2 and history[1].Time < cutoff do
-            table.remove(history, 1)
-        end
-    end
-
     local function getPingSeconds()
         local ok, ping = pcall(function()
             return LocalPlayer:GetNetworkPing()
@@ -2615,14 +2603,33 @@ UIControls.SetupMyESPSection = function()
         return 0
     end
 
-    local function getPingEstimate(root)
-        local ping = getPingSeconds()
-        local oneWay = math.clamp(ping * 0.5, 0, 0.45)
-        local targetTime = os.clock() - oneWay
-        local history = UIControls.MyHitboxHistory
+    local function pushNetworkSample(root)
+        local history = UIControls.NetworkHitboxHistory
+        local now = os.clock()
 
+        -- During Anti Aim, this is the candidate CFrame exposed in the
+        -- physics/replication window. It is more relevant than the rendered root.
+        local candidate = nil
+        if Config.DesyncAntiAimEnabled and UIControls.DesyncSpoofCFrame then
+            candidate = UIControls.DesyncSpoofCFrame
+        end
+        candidate = candidate or root.CFrame
+
+        history[#history + 1] = {
+            Time = now,
+            CFrame = candidate,
+        }
+
+        local cutoff = now - 2.0
+        while #history > 2 and history[1].Time < cutoff do
+            table.remove(history, 1)
+        end
+    end
+
+    local function sampleHistoryAt(targetTime, fallback)
+        local history = UIControls.NetworkHitboxHistory
         if #history == 0 then
-            return root.CFrame, ping
+            return fallback
         end
 
         local before = history[1]
@@ -2638,7 +2645,7 @@ UIControls.SetupMyESPSection = function()
         end
 
         if before == after or after.Time <= before.Time then
-            return before.CFrame, ping
+            return before.CFrame
         end
 
         local alpha = math.clamp(
@@ -2647,22 +2654,34 @@ UIControls.SetupMyESPSection = function()
             1
         )
 
-        return before.CFrame:Lerp(after.CFrame, alpha), ping
+        return before.CFrame:Lerp(after.CFrame, alpha)
     end
 
-    local function destroyGhost(key)
-        local ghost = UIControls[key]
+    local function getNetworkEstimate(root)
+        local ping = getPingSeconds()
+
+        -- Remote players generally observe a delayed/interpolated version of the
+        -- replication stream. GetNetworkPing() does not expose the exact server
+        -- snapshot, so use half-RTT as the best client-side one-way estimate.
+        local oneWay = math.clamp(ping * 0.5, 0, 0.45)
+        local estimate = sampleHistoryAt(os.clock() - oneWay, root.CFrame)
+
+        return estimate, ping
+    end
+
+    local function destroyGhost()
+        local ghost = UIControls.MyNetworkGhost
         if ghost then
             pcall(function() ghost.Model:Destroy() end)
         end
-        UIControls[key] = nil
+        UIControls.MyNetworkGhost = nil
     end
 
-    local function createGhost(key, character, color, labelText)
-        destroyGhost(key)
+    local function createGhost(character)
+        destroyGhost()
 
         local model = New("Model", {
-            Name = "VAFLEX_" .. key,
+            Name = "VAFLEX_NetworkHitbox",
         })
         model.Parent = workspace
 
@@ -2678,7 +2697,7 @@ UIControls.SetupMyESPSection = function()
                 CanQuery = false,
                 CastShadow = false,
                 Material = Enum.Material.Neon,
-                Color = color,
+                Color = Color3.fromRGB(255, 215, 80),
                 Transparency = 0.82,
                 Size = sourcePart.Size,
             })
@@ -2690,8 +2709,8 @@ UIControls.SetupMyESPSection = function()
             Name = "Outline",
             Adornee = model,
             DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
-            FillColor = color,
-            OutlineColor = color,
+            FillColor = Color3.fromRGB(255, 215, 80),
+            OutlineColor = Color3.fromRGB(255, 215, 80),
             FillTransparency = 0.82,
             OutlineTransparency = 0,
             Enabled = true,
@@ -2708,7 +2727,7 @@ UIControls.SetupMyESPSection = function()
             billboard = New("BillboardGui", {
                 Name = "Label",
                 Adornee = labelPart,
-                Size = UDim2.fromOffset(170, 34),
+                Size = UDim2.fromOffset(180, 34),
                 StudsOffset = Vector3.new(0, 2.0, 0),
                 AlwaysOnTop = true,
                 LightInfluence = 0,
@@ -2718,8 +2737,8 @@ UIControls.SetupMyESPSection = function()
             label = New("TextLabel", {
                 Size = UDim2.fromScale(1, 1),
                 BackgroundTransparency = 1,
-                Text = labelText,
-                TextColor3 = color,
+                Text = "NETWORK ESTIMATE",
+                TextColor3 = Color3.fromRGB(255, 215, 80),
                 TextSize = 9,
                 Font = Enum.Font.GothamBold,
                 TextStrokeColor3 = Color3.fromRGB(5, 8, 12),
@@ -2738,24 +2757,24 @@ UIControls.SetupMyESPSection = function()
             Count = #parts,
         }
 
-        UIControls[key] = ghost
+        UIControls.MyNetworkGhost = ghost
         return ghost
     end
 
-    local function ensureGhost(key, character, color, labelText)
-        local ghost = UIControls[key]
+    local function ensureGhost(character)
+        local ghost = UIControls.MyNetworkGhost
         local parts = getBodyParts(character)
 
         if not ghost or not ghost.Model or not ghost.Model.Parent
             or ghost.Character ~= character or ghost.Count ~= #parts then
-            ghost = createGhost(key, character, color, labelText)
+            ghost = createGhost(character)
         end
 
         return ghost
     end
 
-    local function setGhostVisible(key, visible)
-        local ghost = UIControls[key]
+    local function setGhostVisible(visible)
+        local ghost = UIControls.MyNetworkGhost
         if not ghost then return end
 
         if ghost.Highlight then
@@ -2772,7 +2791,7 @@ UIControls.SetupMyESPSection = function()
         end
     end
 
-    local function updateGhost(ghost, character, root, targetRootCFrame, labelText)
+    local function updateGhost(ghost, root, targetRootCFrame, ping)
         if not ghost or not root then return end
 
         local rootDelta = targetRootCFrame * root.CFrame:Inverse()
@@ -2785,27 +2804,47 @@ UIControls.SetupMyESPSection = function()
         end
 
         if ghost.Label then
-            ghost.Label.Text = labelText
+            ghost.Label.Text = string.format(
+                "NETWORK ESTIMATE • %.0f ms",
+                ping * 1000
+            )
         end
     end
 
     UIControls.DestroyMyHitboxESP = function()
-        destroyGhost("MyPingGhost")
+        destroyGhost()
         clearHistory()
 
         if UIControls.MyHitboxPositionLabel then
-            UIControls.MyHitboxPositionLabel.Text = "Ping estimate: unavailable"
+            UIControls.MyHitboxPositionLabel.Text = "Network estimate: unavailable"
         end
     end
 
     Connect(LocalPlayer.CharacterAdded, function()
         clearHistory()
-        destroyGhost("MyPingGhost")
+        destroyGhost()
     end)
 
     Connect(LocalPlayer.CharacterRemoving, function()
         clearHistory()
-        destroyGhost("MyPingGhost")
+        destroyGhost()
+    end)
+
+    -- Capture the replication candidate after physics, matching the Anti Aim
+    -- phase where spoof CFrame/velocity is active.
+    local networkSampleSignal = RunService.PostSimulation or RunService.Heartbeat
+    Connect(networkSampleSignal, function()
+        if not Running then return end
+
+        local character = LocalPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+
+        if not character or not root or not humanoid or humanoid.Health <= 0 then
+            return
+        end
+
+        pushNetworkSample(root)
     end)
 
     Connect(RunService.Heartbeat, function()
@@ -2816,52 +2855,36 @@ UIControls.SetupMyESPSection = function()
         local root = character and character:FindFirstChild("HumanoidRootPart")
 
         if not character or not root or not humanoid or humanoid.Health <= 0 then
-            setGhostVisible("MyPingGhost", false)
+            setGhostVisible(false)
 
             if UIControls.MyHitboxPositionLabel then
-                UIControls.MyHitboxPositionLabel.Text = "Ping estimate: unavailable"
+                UIControls.MyHitboxPositionLabel.Text = "Network estimate: unavailable"
             end
             return
         end
 
-        pushHistory(root)
+        local networkCFrame, ping = getNetworkEstimate(root)
+        local pos = networkCFrame.Position
 
-        local localCFrame = root.CFrame
-        local pingCFrame, ping = getPingEstimate(root)
-        local pingPos = pingCFrame.Position
-
-        UIControls.MyEstimatedServerCFrame = pingCFrame
-        UIControls.MyEstimatedServerPosition = pingPos
+        UIControls.MyEstimatedServerCFrame = networkCFrame
+        UIControls.MyEstimatedServerPosition = pos
 
         if UIControls.MyHitboxPositionLabel then
             UIControls.MyHitboxPositionLabel.Text = string.format(
-                "Ping est: %.1f, %.1f, %.1f • %.0f ms",
-                pingPos.X, pingPos.Y, pingPos.Z,
+                "Network est: %.1f, %.1f, %.1f • %.0f ms",
+                pos.X, pos.Y, pos.Z,
                 ping * 1000
             )
         end
 
         if not Config.ShowMyHitbox then
-            setGhostVisible("MyPingGhost", false)
+            setGhostVisible(false)
             return
         end
 
-        local pingGhost = ensureGhost(
-            "MyPingGhost",
-            character,
-            Color3.fromRGB(255, 215, 80),
-            "PING HITBOX"
-        )
-
-        updateGhost(
-            pingGhost,
-            character,
-            root,
-            pingCFrame,
-            string.format("PING HITBOX • %.0f ms", ping * 1000)
-        )
-
-        setGhostVisible("MyPingGhost", true)
+        local ghost = ensureGhost(character)
+        updateGhost(ghost, root, networkCFrame, ping)
+        setGhostVisible(true)
     end)
 end
 

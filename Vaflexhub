@@ -1506,27 +1506,50 @@ do
         if not defenseState.DesyncSpoofed then return end
 
         local root = defenseState.DesyncRoot
-        local humanoid = defenseState.DesyncHumanoid
 
         if root and root.Parent then
             pcall(function()
-                if defenseState.DesyncRealCFrame then
-                    root.CFrame = defenseState.DesyncRealCFrame
+                local realCFrame = defenseState.DesyncRealCFrame
+                local spoofCFrame = defenseState.DesyncSpoofCFrame
+
+                -- Movement runs after PostSimulation. If Spin / Strafe changed the
+                -- CFrame while Anti Aim was spoofed, preserve that relative change
+                -- instead of blindly restoring the old CFrame and cancelling it.
+                if realCFrame and spoofCFrame then
+                    local afterSpoofDelta = spoofCFrame:ToObjectSpace(root.CFrame)
+                    root.CFrame = realCFrame * afterSpoofDelta
+                elseif realCFrame then
+                    root.CFrame = realCFrame
                 end
-                if defenseState.DesyncRealVelocity then
-                    root.AssemblyLinearVelocity = defenseState.DesyncRealVelocity
-                    root.Velocity = defenseState.DesyncRealVelocity
+
+                local realVelocity = defenseState.DesyncRealVelocity
+                local spoofVelocity = defenseState.DesyncSpoofVelocity
+                local currentVelocity = root.AssemblyLinearVelocity
+
+                if realVelocity and spoofVelocity then
+                    -- Restore only components that are still our spoof. If a
+                    -- movement feature changed a component after the spoof, keep it.
+                    local tolerance = 1.25
+
+                    local x = math.abs(currentVelocity.X - spoofVelocity.X) <= tolerance
+                        and realVelocity.X or currentVelocity.X
+                    local y = math.abs(currentVelocity.Y - spoofVelocity.Y) <= tolerance
+                        and realVelocity.Y or currentVelocity.Y
+                    local z = math.abs(currentVelocity.Z - spoofVelocity.Z) <= tolerance
+                        and realVelocity.Z or currentVelocity.Z
+
+                    local restoredVelocity = Vector3.new(x, y, z)
+                    root.AssemblyLinearVelocity = restoredVelocity
+                    root.Velocity = restoredVelocity
+                elseif realVelocity then
+                    root.AssemblyLinearVelocity = realVelocity
+                    root.Velocity = realVelocity
                 end
+
                 if defenseState.DesyncRealAngularVelocity then
                     root.AssemblyAngularVelocity = defenseState.DesyncRealAngularVelocity
                     root.RotVelocity = defenseState.DesyncRealAngularVelocity
                 end
-            end)
-        end
-
-        if humanoid and humanoid.Parent and defenseState.DesyncRealHumanoidState then
-            pcall(function()
-                humanoid:ChangeState(defenseState.DesyncRealHumanoidState)
             end)
         end
 
@@ -1620,11 +1643,6 @@ do
             defenseState.DesyncRealVelocity = realVelocity
             defenseState.DesyncRealAngularVelocity = realAngular
 
-            local okState, stateNow = pcall(function()
-                return humanoid:GetState()
-            end)
-            defenseState.DesyncRealHumanoidState = okState and stateNow or nil
-
             local spoofVelocity, baseOffset = phaseData(os.clock())
 
             -- When standing still, position samples are the strongest fallback in
@@ -1653,10 +1671,8 @@ do
                 root.AssemblyAngularVelocity = Vector3.zero
                 root.RotVelocity = Vector3.zero
 
-                -- Fresh Jumping state + accepted vertical velocity attacks the
-                -- predictor's strongest vertical branch.
-                humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-
+                -- Do not force HumanoidState here. Repeated Jumping pulses fight
+                -- AirJump and character animations. Velocity/CFrame spoof stays active.
                 defenseState.DesyncSpoofed = true
             end)
         end)
@@ -6871,6 +6887,83 @@ UIControls.FlingRole = function(roleName)
 
     task.spawn(function()
         local ok, err = RunYARHMFling(target, generation, roleName)
+        if generation == UIControls.FlingGeneration then
+            UIControls.FlingBusy = false
+            if UIControls.CombatStatus then
+                if ok then
+                    UIControls.CombatStatus.Text = "Fling finished • returned"
+                else
+                    UIControls.CombatStatus.Text = "Fling stopped: " .. tostring(err or "target unavailable")
+                end
+            end
+        end
+    end)
+end
+
+UIControls.FlingPlayer = function(target)
+    if UIControls.FlingBusy then
+        if UIControls.CombatStatus then
+            UIControls.CombatStatus.Text = "Fling is already running"
+        end
+        return
+    end
+
+    if Config.CoinFarmEnabled or Config.FlyEnabled then
+        if UIControls.CombatStatus then
+            UIControls.CombatStatus.Text = "Turn off Auto Coin Farm / Fly before Fling"
+        end
+        return
+    end
+
+    if not target or target == LocalPlayer or target.Parent ~= Players then
+        if UIControls.CombatStatus then
+            UIControls.CombatStatus.Text = "Select a valid player first"
+        end
+        return
+    end
+
+    local targetCharacter = target.Character
+    local targetHumanoid = targetCharacter and targetCharacter:FindFirstChildOfClass("Humanoid")
+    local targetRoot = targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart")
+
+    if not targetCharacter or not targetHumanoid or targetHumanoid.Health <= 0
+        or not targetRoot or targetRoot.Anchored then
+        if UIControls.CombatStatus then
+            UIControls.CombatStatus.Text = "Selected player is not ready"
+        end
+        return
+    end
+
+    UIControls.FlingBusy = true
+    UIControls.FlingGeneration = UIControls.FlingGeneration + 1
+    local generation = UIControls.FlingGeneration
+
+    -- Anti Aim and Fling both own the local root CFrame/velocity. Suspend Anti Aim
+    -- for the fling and restore it afterward so they cannot cancel each other.
+    local restoreAntiAim = Config.DesyncAntiAimEnabled == true
+    if restoreAntiAim and UIControls.SetDesyncAntiAim then
+        pcall(function()
+            UIControls.SetDesyncAntiAim(false)
+        end)
+    end
+
+    if UIControls.CombatStatus then
+        UIControls.CombatStatus.Text = "Fling player: " .. target.DisplayName
+    end
+
+    task.spawn(function()
+        local ok, err = RunYARHMFling(target, generation, "Player")
+
+        if restoreAntiAim and Running and UIControls.SetDesyncAntiAim then
+            task.delay(0.15, function()
+                if Running then
+                    pcall(function()
+                        UIControls.SetDesyncAntiAim(true)
+                    end)
+                end
+            end)
+        end
+
         if generation == UIControls.FlingGeneration then
             UIControls.FlingBusy = false
             if UIControls.CombatStatus then

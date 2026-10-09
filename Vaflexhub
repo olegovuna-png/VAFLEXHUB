@@ -2531,7 +2531,7 @@ UIControls.SetupMyESPSection = function()
         Position = UDim2.fromOffset(13, 0),
         Size = UDim2.new(1, -80, 1, 0),
         BackgroundTransparency = 1,
-        Text = "Show Network Hitbox",
+        Text = "Show Remote View Hitbox",
         TextColor3 = Config.Text,
         TextSize = 10,
         Font = Enum.Font.GothamSemibold,
@@ -2553,7 +2553,7 @@ UIControls.SetupMyESPSection = function()
         Position = UDim2.fromOffset(10, 103),
         Size = UDim2.new(1, -20, 0, 34),
         BackgroundTransparency = 1,
-        Text = "Network estimate: unavailable",
+        Text = "Remote view estimate: unavailable",
         TextColor3 = Config.Muted,
         TextSize = 7,
         Font = Enum.Font.Gotham,
@@ -2660,13 +2660,32 @@ UIControls.SetupMyESPSection = function()
     local function getNetworkEstimate(root)
         local ping = getPingSeconds()
 
-        -- Remote players generally observe a delayed/interpolated version of the
-        -- replication stream. GetNetworkPing() does not expose the exact server
-        -- snapshot, so use half-RTT as the best client-side one-way estimate.
-        local oneWay = math.clamp(ping * 0.5, 0, 0.45)
-        local estimate = sampleHistoryAt(os.clock() - oneWay, root.CFrame)
+        -- GetNetworkPing() is RTT-like latency for this client. The server itself
+        -- is roughly one local one-way trip behind (~ping/2), but another player
+        -- normally sees an older replicated/interpolated state:
+        --
+        -- local -> server        ~= ping/2
+        -- server -> other player ~= estimated ping/2
+        -- render interpolation   ~= 45-70 ms
+        --
+        -- We do not know the other player's actual ping from this client, so use
+        -- our own one-way delay as the neutral estimate for the return leg.
+        local oneWayLocal = math.clamp(ping * 0.5, 0, 0.30)
+        local estimatedOtherOneWay = oneWayLocal
+        local interpolationBuffer = 0.055
 
-        return estimate, ping
+        local remoteViewDelay = math.clamp(
+            oneWayLocal + estimatedOtherOneWay + interpolationBuffer,
+            0,
+            0.35
+        )
+
+        local estimate = sampleHistoryAt(
+            os.clock() - remoteViewDelay,
+            root.CFrame
+        )
+
+        return estimate, ping, remoteViewDelay
     end
 
     local function destroyGhost()
@@ -2681,7 +2700,7 @@ UIControls.SetupMyESPSection = function()
         destroyGhost()
 
         local model = New("Model", {
-            Name = "VAFLEX_NetworkHitbox",
+            Name = "VAFLEX_RemoteViewHitbox",
         })
         model.Parent = workspace
 
@@ -2737,7 +2756,7 @@ UIControls.SetupMyESPSection = function()
             label = New("TextLabel", {
                 Size = UDim2.fromScale(1, 1),
                 BackgroundTransparency = 1,
-                Text = "NETWORK ESTIMATE",
+                Text = "REMOTE VIEW ESTIMATE",
                 TextColor3 = Color3.fromRGB(255, 215, 80),
                 TextSize = 9,
                 Font = Enum.Font.GothamBold,
@@ -2805,7 +2824,7 @@ UIControls.SetupMyESPSection = function()
 
         if ghost.Label then
             ghost.Label.Text = string.format(
-                "NETWORK ESTIMATE • %.0f ms",
+                "REMOTE VIEW • %.0f ms",
                 ping * 1000
             )
         end
@@ -2816,7 +2835,7 @@ UIControls.SetupMyESPSection = function()
         clearHistory()
 
         if UIControls.MyHitboxPositionLabel then
-            UIControls.MyHitboxPositionLabel.Text = "Network estimate: unavailable"
+            UIControls.MyHitboxPositionLabel.Text = "Remote view estimate: unavailable"
         end
     end
 
@@ -2858,22 +2877,24 @@ UIControls.SetupMyESPSection = function()
             setGhostVisible(false)
 
             if UIControls.MyHitboxPositionLabel then
-                UIControls.MyHitboxPositionLabel.Text = "Network estimate: unavailable"
+                UIControls.MyHitboxPositionLabel.Text = "Remote view estimate: unavailable"
             end
             return
         end
 
-        local networkCFrame, ping = getNetworkEstimate(root)
+        local networkCFrame, ping, remoteDelay = getNetworkEstimate(root)
         local pos = networkCFrame.Position
+        local serverDelay = math.clamp(ping * 0.5, 0, 0.30)
 
         UIControls.MyEstimatedServerCFrame = networkCFrame
         UIControls.MyEstimatedServerPosition = pos
 
         if UIControls.MyHitboxPositionLabel then
             UIControls.MyHitboxPositionLabel.Text = string.format(
-                "Network est: %.1f, %.1f, %.1f • %.0f ms",
+                "Remote: %.1f, %.1f, %.1f | server ~%.0f ms | view ~%.0f ms",
                 pos.X, pos.Y, pos.Z,
-                ping * 1000
+                serverDelay * 1000,
+                remoteDelay * 1000
             )
         end
 

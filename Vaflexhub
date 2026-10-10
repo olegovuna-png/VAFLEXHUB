@@ -1482,7 +1482,7 @@ do
                 return
             end
 
-            if Config.DesyncAntiAimEnabled or Config.FlyEnabled or UIControls.FlingBusy then
+            if Config.DesyncAntiAimEnabled or Config.FlyEnabled or UIControls.FlingBusy or UIControls.TeleportBusy then
                 defenseState.LastSafeCFrame = root.CFrame
                 return
             end
@@ -2055,9 +2055,104 @@ UIControls.SetupCombatPage = function()
         end)
 
         UIControls.ThrowKnifeNowButton = throwNow
+
+        local killAll = New("TextButton", {
+            Name = "KillAllMurder",
+            Position = UDim2.fromOffset(0, 112),
+            Size = UDim2.new(1, 0, 0, 38),
+            BackgroundColor3 = Color3.fromRGB(103, 34, 45),
+            BackgroundTransparency = 0.12,
+            BorderSizePixel = 0,
+            Text = "Kill All",
+            TextColor3 = Config.Text,
+            TextSize = 10,
+            Font = Enum.Font.GothamBold,
+            AutoButtonColor = false,
+            ZIndex = 107,
+        })
+        killAll.Parent = murderPage
+        Corner(killAll, 11)
+        Stroke(killAll, Config.Border, 0.12, 1)
+
+        Connect(killAll.MouseButton1Click, function()
+            PlayClickSound()
+            if UIControls.KillAllMurder then
+                UIControls.KillAllMurder()
+            end
+        end)
+
+        UIControls.KillAllMurderButton = killAll
     end
 
-    addEmptyRoleText(sheriffPage, "Sheriff", "Sheriff / Hero role detected. Role-specific functions can be added here.")
+    do
+        local getGun = New("TextButton", {
+            Name = "GetGun",
+            Position = UDim2.fromOffset(0, 0),
+            Size = UDim2.new(1, 0, 0, 42),
+            BackgroundColor3 = Color3.fromRGB(38, 61, 91),
+            BackgroundTransparency = 0.14,
+            BorderSizePixel = 0,
+            Text = "Get Gun",
+            TextColor3 = Config.Text,
+            TextSize = 10,
+            Font = Enum.Font.GothamBold,
+            AutoButtonColor = false,
+            ZIndex = 107,
+        })
+        getGun.Parent = sheriffPage
+        Corner(getGun, 11)
+        Stroke(getGun, Config.Border, 0.12, 1)
+
+        Connect(getGun.MouseButton1Click, function()
+            PlayClickSound()
+            if UIControls.GetDroppedGun then
+                UIControls.GetDroppedGun()
+            end
+        end)
+
+        local shootMurderer = New("TextButton", {
+            Name = "ShootMurderer",
+            Position = UDim2.fromOffset(0, 50),
+            Size = UDim2.new(1, 0, 0, 42),
+            BackgroundColor3 = Color3.fromRGB(43, 72, 106),
+            BackgroundTransparency = 0.10,
+            BorderSizePixel = 0,
+            Text = "Shoot Murderer",
+            TextColor3 = Config.Text,
+            TextSize = 10,
+            Font = Enum.Font.GothamBold,
+            AutoButtonColor = false,
+            ZIndex = 107,
+        })
+        shootMurderer.Parent = sheriffPage
+        Corner(shootMurderer, 11)
+        Stroke(shootMurderer, Config.Border, 0.12, 1)
+
+        Connect(shootMurderer.MouseButton1Click, function()
+            PlayClickSound()
+            if UIControls.ShootMurdererSilent then
+                UIControls.ShootMurdererSilent()
+            end
+        end)
+
+        local sheriffStatus = New("TextLabel", {
+            Position = UDim2.fromOffset(4, 100),
+            Size = UDim2.new(1, -8, 0, 30),
+            BackgroundTransparency = 1,
+            Text = "Sheriff tools ready",
+            TextColor3 = Config.Muted,
+            TextSize = 8,
+            Font = Enum.Font.Gotham,
+            TextWrapped = true,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 107,
+        })
+        sheriffStatus.Parent = sheriffPage
+
+        UIControls.GetGunButton = getGun
+        UIControls.ShootMurdererButton = shootMurderer
+        UIControls.SheriffStatus = sheriffStatus
+    end
 
     local universalScroll = New("ScrollingFrame", {
         Name = "UniversalFlingScroll",
@@ -6810,6 +6905,90 @@ UIControls.SetupMurderThrowEngine = function()
         return ok
     end
 
+    UIControls.KillAllMurder = function()
+        local character = LocalPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if not character or not humanoid or humanoid.Health <= 0 then
+            setStatus("Character is not ready")
+            return false
+        end
+
+        local knife = getKnife()
+        if not knife then
+            setStatus("Knife not found")
+            return false
+        end
+
+        if knife.Parent ~= character then
+            pcall(function()
+                humanoid:EquipTool(knife)
+            end)
+        end
+
+        local handle = knife:FindFirstChild("Handle")
+        local events = knife:FindFirstChild("Events")
+        local knifeThrown = events and events:FindFirstChild("KnifeThrown")
+
+        if not handle or not knifeThrown or not knifeThrown:IsA("RemoteEvent") then
+            setStatus("Knife throw event is unavailable")
+            return false
+        end
+
+        local throwSpeed = tonumber(knife:GetAttribute("ThrowSpeed")) or 100
+        local targets = {}
+
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then
+                local targetCharacter = player.Character
+                local targetHumanoid = targetCharacter and targetCharacter:FindFirstChildOfClass("Humanoid")
+                local targetRoot = targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart")
+
+                if targetHumanoid and targetHumanoid.Health > 0 and targetRoot and not targetRoot.Anchored then
+                    table.insert(targets, {
+                        Player = player,
+                        Humanoid = targetHumanoid,
+                        Root = targetRoot,
+                    })
+                end
+            end
+        end
+
+        if #targets == 0 then
+            setStatus("No living targets")
+            return false
+        end
+
+        setStatus("Kill All -> " .. tostring(#targets) .. " targets")
+
+        -- Fire one predicted knife packet per living target from a single click.
+        -- There is no local charge delay between targets.
+        task.spawn(function()
+            for _, data in ipairs(targets) do
+                if not Running or not knife.Parent or not handle.Parent then
+                    break
+                end
+
+                if data.Humanoid.Parent and data.Humanoid.Health > 0 and data.Root.Parent then
+                    local predictedPosition = getPrediction(
+                        data.Root,
+                        data.Humanoid,
+                        handle.Position,
+                        throwSpeed
+                    )
+
+                    pcall(function()
+                        knifeThrown:FireServer(
+                            handle.CFrame,
+                            CFrame.new(predictedPosition)
+                        )
+                    end)
+                end
+            end
+        end)
+
+        return true
+    end
+
     local function createMobileButton()
         if UIControls.ThrowKnifeMobileRoot and UIControls.ThrowKnifeMobileRoot.Parent then
             return
@@ -6963,6 +7142,297 @@ UIControls.SetupMurderThrowEngine = function()
 end
 
 UIControls.SetupMurderThrowEngine()
+
+
+--// ============================================================
+--// SHERIFF / HERO - GET GUN + SILENT SHOT
+--// ============================================================
+
+UIControls.SetupSheriffEngine = function()
+    local BASE_PLAYER_SPEED = 16
+
+    local function setSheriffStatus(message)
+        if UIControls.SheriffStatus then
+            UIControls.SheriffStatus.Text = message
+        end
+        if UIControls.CombatStatus then
+            UIControls.CombatStatus.Text = message
+        end
+    end
+
+    local function findGunTool()
+        local character = LocalPlayer.Character
+        local backpack = LocalPlayer:FindFirstChild("Backpack")
+
+        local gun = character and character:FindFirstChild("Gun")
+        if not gun and character then
+            gun = character:FindFirstChild("Revolver")
+        end
+        if not gun and backpack then
+            gun = backpack:FindFirstChild("Gun") or backpack:FindFirstChild("Revolver")
+        end
+
+        return gun
+    end
+
+    local function findDroppedGun()
+        local exact = workspace:FindFirstChild("GunDrop", true)
+        if exact then
+            return exact
+        end
+
+        local accepted = {
+            ["gundrop"] = true,
+            ["droppedgun"] = true,
+            ["dropped gun"] = true,
+            ["gun drop"] = true,
+        }
+
+        for _, object in ipairs(workspace:GetDescendants()) do
+            if accepted[string.lower(object.Name)] then
+                return object
+            end
+        end
+
+        return nil
+    end
+
+    local function getObjectCFrame(object)
+        if not object then return nil end
+
+        if object:IsA("BasePart") then
+            return object.CFrame
+        end
+
+        if object:IsA("Model") then
+            local ok, pivot = pcall(function()
+                return object:GetPivot()
+            end)
+            if ok then return pivot end
+        end
+
+        if object:IsA("Tool") then
+            local handle = object:FindFirstChild("Handle")
+            if handle and handle:IsA("BasePart") then
+                return handle.CFrame
+            end
+        end
+
+        local part = object:FindFirstChildWhichIsA("BasePart", true)
+        return part and part.CFrame or nil
+    end
+
+    UIControls.GetDroppedGun = function()
+        if UIControls.TeleportBusy then
+            setSheriffStatus("Get Gun is already running")
+            return false
+        end
+
+        local character = LocalPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+
+        if not character or not humanoid or humanoid.Health <= 0 or not root then
+            setSheriffStatus("Character is not ready")
+            return false
+        end
+
+        local gunDrop = findDroppedGun()
+        local gunCFrame = getObjectCFrame(gunDrop)
+        if not gunDrop or not gunCFrame then
+            setSheriffStatus("Dropped gun not found")
+            return false
+        end
+
+        UIControls.TeleportBusy = true
+
+        local returnPivot = character:GetPivot()
+        local restoreAntiAim = Config.DesyncAntiAimEnabled == true
+
+        if restoreAntiAim and UIControls.SetDesyncAntiAim then
+            pcall(function()
+                UIControls.SetDesyncAntiAim(false)
+            end)
+        end
+
+        task.spawn(function()
+            local ok = pcall(function()
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+                character:PivotTo(gunCFrame * CFrame.new(0, 0.45, 0))
+
+                -- Stay on the dropped revolver for exactly half a second.
+                task.wait(0.50)
+
+                if character.Parent and humanoid.Health > 0 then
+                    character:PivotTo(returnPivot)
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                end
+            end)
+
+            UIControls.TeleportBusy = false
+
+            if restoreAntiAim and Running and UIControls.SetDesyncAntiAim then
+                task.delay(0.12, function()
+                    if Running then
+                        pcall(function()
+                            UIControls.SetDesyncAntiAim(true)
+                        end)
+                    end
+                end)
+            end
+
+            local gun = findGunTool()
+            if ok and gun then
+                setSheriffStatus("Gun picked up • returned")
+            elseif ok then
+                setSheriffStatus("Returned • gun was not picked up")
+            else
+                setSheriffStatus("Get Gun failed")
+            end
+        end)
+
+        return true
+    end
+
+    local function findMurderer()
+        RefreshRemoteRoles()
+
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and GetRole(player) == "Murderer" then
+                local character = player.Character
+                local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+                local root = character and character:FindFirstChild("HumanoidRootPart")
+
+                if humanoid and humanoid.Health > 0 and root and not root.Anchored then
+                    return player, humanoid, root
+                end
+            end
+        end
+
+        return nil
+    end
+
+    local function predictMurderer(root, humanoid)
+        local ping = 0
+        pcall(function()
+            ping = LocalPlayer:GetNetworkPing()
+        end)
+        if type(ping) ~= "number" or ping < 0 or ping > 5 then
+            ping = 0
+        end
+
+        -- Revolver is effectively hitscan here, so prediction is mostly network
+        -- lead rather than projectile travel time.
+        local predictTime = math.clamp((ping * 0.5) + 0.018, 0.01, 0.25)
+
+        local velocity = root.AssemblyLinearVelocity
+        local horizontal = Vector3.new(velocity.X, 0, velocity.Z)
+        local moveDirection = humanoid.MoveDirection
+
+        if moveDirection.Magnitude > 0.05 then
+            if horizontal.Magnitude < 4 then
+                horizontal = moveDirection.Unit * BASE_PLAYER_SPEED
+            elseif horizontal.Magnitude > 42 then
+                horizontal = horizontal.Unit * 42
+            end
+        elseif horizontal.Magnitude < 1 then
+            horizontal = Vector3.zero
+        end
+
+        local predicted = root.Position + horizontal * predictTime
+
+        if humanoid.FloorMaterial == Enum.Material.Air then
+            local verticalVelocity = math.clamp(velocity.Y, -90, 90)
+            local verticalOffset = verticalVelocity * predictTime
+                - 0.5 * workspace.Gravity * predictTime * predictTime
+
+            predicted = Vector3.new(
+                predicted.X,
+                root.Position.Y + math.clamp(verticalOffset, -18, 18),
+                predicted.Z
+            )
+        end
+
+        return predicted, predictTime
+    end
+
+    UIControls.ShootMurdererSilent = function()
+        local character = LocalPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if not character or not humanoid or humanoid.Health <= 0 then
+            setSheriffStatus("Character is not ready")
+            return false
+        end
+
+        local gun = findGunTool()
+        if not gun then
+            setSheriffStatus("Gun not found")
+            return false
+        end
+
+        if gun.Parent ~= character then
+            pcall(function()
+                humanoid:EquipTool(gun)
+            end)
+        end
+
+        local murderer, targetHumanoid, targetRoot = findMurderer()
+        if not murderer then
+            setSheriffStatus("Murderer not found")
+            return false
+        end
+
+        local shoot = gun:FindFirstChild("Shoot") or gun:FindFirstChild("Shoot", true)
+        if not shoot then
+            setSheriffStatus("Gun Shoot remote not found")
+            return false
+        end
+
+        local rightHand = character:FindFirstChild("RightHand")
+            or character:FindFirstChild("Right Arm")
+        local handle = gun:FindFirstChild("Handle")
+
+        local originPosition = rightHand and rightHand.Position
+            or (handle and handle.Position)
+            or character:GetPivot().Position
+
+        local predictedPosition, predictTime = predictMurderer(
+            targetRoot,
+            targetHumanoid
+        )
+
+        local originCFrame = CFrame.new(originPosition)
+        local targetCFrame = CFrame.new(predictedPosition)
+
+        local ok, err = pcall(function()
+            -- Working MM2/YARHM-style signature:
+            -- Gun.Shoot:FireServer(CFrame.new(RightHand.Position), CFrame.new(targetPosition))
+            if shoot:IsA("RemoteEvent") then
+                shoot:FireServer(originCFrame, targetCFrame)
+            elseif shoot:IsA("RemoteFunction") then
+                shoot:InvokeServer(originCFrame, targetCFrame)
+            else
+                error("Unsupported Shoot remote")
+            end
+        end)
+
+        if ok then
+            setSheriffStatus(string.format(
+                "Shot -> %s • %.0f ms predict",
+                murderer.DisplayName,
+                predictTime * 1000
+            ))
+        else
+            setSheriffStatus("Shot failed: " .. tostring(err))
+        end
+
+        return ok
+    end
+end
+
+UIControls.SetupSheriffEngine()
 
 
 --// ============================================================

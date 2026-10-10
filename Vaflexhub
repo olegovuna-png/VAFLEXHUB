@@ -2448,9 +2448,8 @@ WatermarkRow.Parent = MenuBody
 Corner(WatermarkRow, 11)
 
 if IsMobile then
-    -- Mobile watermark is mandatory in this build.
+    -- Mobile watermark is mandatory, but its settings remain available.
     Config.Watermark = true
-    WatermarkRow.Visible = false
 end
 
 local WatermarkRowTitle = New("TextLabel", {
@@ -2500,17 +2499,17 @@ UIControls.WatermarkSwitch = CreateSwitch(WatermarkRow, UDim2.new(1, -9, 0.5, 0)
     if IsMobile then
         Config.Watermark = true
         if SetWatermarkEnabled then SetWatermarkEnabled(true) end
-        task.defer(function()
-            if UIControls.WatermarkSwitch then
-                UIControls.WatermarkSwitch:SetInstant(true, false)
-            end
-        end)
         return
     end
 
     Config.Watermark = value
     if SetWatermarkEnabled then SetWatermarkEnabled(value) end
 end)
+
+if IsMobile and UIControls.WatermarkSwitch and UIControls.WatermarkSwitch.Instance then
+    UIControls.WatermarkSwitch.Instance.Visible = false
+    WatermarkGear.Position = UDim2.new(1, -10, 0.5, 0)
+end
 
 --// ============================================================
 --// MY ESP
@@ -5127,7 +5126,7 @@ do
         if UIControls.MyRoleESPSwitch then UIControls.MyRoleESPSwitch:SetInstant(Config.MyRoleESP, false) end
         if UIControls.ShowMyHitboxSwitch then UIControls.ShowMyHitboxSwitch:SetInstant(Config.ShowMyHitbox, false) end
         UIControls.GunSwitch:SetInstant(Config.GunESP, false)
-        UIControls.WatermarkSwitch:SetInstant(Config.Watermark, false)
+        UIControls.WatermarkSwitch:SetInstant(IsMobile and true or Config.Watermark, false)
         UIControls.RoleNames:SetInstant(Config.RoleOptions.ShowUsernames, false)
         UIControls.RoleDistance:SetInstant(Config.RoleOptions.ShowDistance, false)
         UIControls.WatermarkNickname:SetInstant(Config.WatermarkOptions.ShowNickname, false)

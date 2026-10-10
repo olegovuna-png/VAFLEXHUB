@@ -83,6 +83,9 @@ local Config = {
     AntiFlingEnabled = false,
     DesyncAntiAimEnabled = false,
 
+    -- Murderer
+    ThrowKnifeEnabled = false,
+
     -- Small on-screen list of currently enabled functions
     FunctionsHUDEnabled = false,
 
@@ -469,11 +472,11 @@ local RevealSound = New("Sound", {
 RevealSound.Parent = SoundsFolder
 
 local ClickSound = New("Sound", {
-    Name = "ClickMeowTemplate",
-    -- Short cat meow from Roblox Creator Store.
-    SoundId = "rbxassetid://83454004588488",
-    Volume = 0.16,
-    PlaybackSpeed = 1.85,
+    Name = "ClickSoftTemplate",
+    -- Short soft UI ping bundled with Roblox.
+    SoundId = "rbxasset://sounds/electronicpingshort.wav",
+    Volume = 0.11,
+    PlaybackSpeed = 1.22,
 })
 ClickSound.Parent = SoundsFolder
 
@@ -482,18 +485,18 @@ local function PlayClickSound()
 
     -- Clone per click so fast repeated clicks do not cut each other off.
     local sound = ClickSound:Clone()
-    sound.Name = "ClickMeow"
+    sound.Name = "ClickSoft"
     sound.Parent = SoundsFolder
     sound.TimePosition = 0
     sound:Play()
 
-    -- Keep it as a tiny UI chirp instead of playing the whole sample.
-    task.delay(0.19, function()
+    -- Soft, short UI tap.
+    task.delay(0.12, function()
         if sound and sound.Parent then
             sound:Stop()
         end
     end)
-    Debris:AddItem(sound, 0.24)
+    Debris:AddItem(sound, 0.18)
 end
 
 --// ============================================================
@@ -1973,7 +1976,87 @@ UIControls.SetupCombatPage = function()
         subLabel.Parent = card
     end
 
-    addEmptyRoleText(murderPage, "Murder", "Murder role detected. Role-specific functions can be added here.")
+    do
+        local throwRow = New("Frame", {
+            Name = "ThrowKnifeRow",
+            Position = UDim2.fromOffset(0, 0),
+            Size = UDim2.new(1, 0, 0, 58),
+            BackgroundColor3 = Config.Panel2,
+            BackgroundTransparency = 0.05,
+            BorderSizePixel = 0,
+            ZIndex = 106,
+        })
+        throwRow.Parent = murderPage
+        Corner(throwRow, 12)
+        Stroke(throwRow, Config.Border, 0.10, 1)
+
+        local throwTitle = New("TextLabel", {
+            Position = UDim2.fromOffset(13, 6),
+            Size = UDim2.new(1, -82, 0, 20),
+            BackgroundTransparency = 1,
+            Text = "Throw a Knife",
+            TextColor3 = Config.Text,
+            TextSize = 10,
+            Font = Enum.Font.GothamBold,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 107,
+        })
+        throwTitle.Parent = throwRow
+
+        local throwSub = New("TextLabel", {
+            Position = UDim2.fromOffset(13, 27),
+            Size = UDim2.new(1, -82, 0, 23),
+            BackgroundTransparency = 1,
+            Text = "Nearest player • movement + jump prediction",
+            TextColor3 = Config.Muted,
+            TextSize = 7,
+            Font = Enum.Font.Gotham,
+            TextWrapped = true,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 107,
+        })
+        throwSub.Parent = throwRow
+
+        UIControls.ThrowKnifeSwitch = CreateSwitch(
+            throwRow,
+            UDim2.new(1, -9, 0.5, 0),
+            Config.ThrowKnifeEnabled,
+            function(value)
+                Config.ThrowKnifeEnabled = value
+                if UIControls.SetThrowKnifeEnabled then
+                    UIControls.SetThrowKnifeEnabled(value)
+                end
+            end
+        )
+
+        local throwNow = New("TextButton", {
+            Name = "ThrowKnifeNow",
+            Position = UDim2.fromOffset(0, 66),
+            Size = UDim2.new(1, 0, 0, 38),
+            BackgroundColor3 = Color3.fromRGB(86, 40, 48),
+            BackgroundTransparency = 0.16,
+            BorderSizePixel = 0,
+            Text = "Throw nearest now",
+            TextColor3 = Config.Text,
+            TextSize = 10,
+            Font = Enum.Font.GothamSemibold,
+            AutoButtonColor = false,
+            ZIndex = 107,
+        })
+        throwNow.Parent = murderPage
+        Corner(throwNow, 11)
+        Stroke(throwNow, Config.Border, 0.12, 1)
+
+        Connect(throwNow.MouseButton1Click, function()
+            PlayClickSound()
+            if UIControls.ThrowKnifeNearest then
+                UIControls.ThrowKnifeNearest()
+            end
+        end)
+
+        UIControls.ThrowKnifeNowButton = throwNow
+    end
+
     addEmptyRoleText(sheriffPage, "Sheriff", "Sheriff / Hero role detected. Role-specific functions can be added here.")
 
     local universalScroll = New("ScrollingFrame", {
@@ -5046,6 +5129,7 @@ do
         CoinFarmSpeed = 22,
         AntiFlingEnabled = false,
         DesyncAntiAimEnabled = false,
+        ThrowKnifeEnabled = false,
         FunctionsHUDEnabled = false,
     }
 
@@ -5081,6 +5165,7 @@ do
             CoinFarmSpeed = Config.CoinFarmSpeed,
             AntiFlingEnabled = Config.AntiFlingEnabled,
             DesyncAntiAimEnabled = Config.DesyncAntiAimEnabled,
+            ThrowKnifeEnabled = Config.ThrowKnifeEnabled,
             FunctionsHUDEnabled = Config.FunctionsHUDEnabled,
         }
     end
@@ -5120,6 +5205,7 @@ do
         Config.CoinFarmSpeed = math.clamp(snapshot.CoinFarmSpeed or 22, 1, 100)
         Config.AntiFlingEnabled = snapshot.AntiFlingEnabled == true
         Config.DesyncAntiAimEnabled = snapshot.DesyncAntiAimEnabled == true
+        Config.ThrowKnifeEnabled = snapshot.ThrowKnifeEnabled == true
         Config.FunctionsHUDEnabled = snapshot.FunctionsHUDEnabled == true
 
         UIControls.RoleSwitch:SetInstant(Config.RoleESP, false)
@@ -5147,6 +5233,8 @@ do
         if UIControls.ApplyCoinFarmState then UIControls.ApplyCoinFarmState(Config.CoinFarmEnabled) end
         if UIControls.SetAntiFling then UIControls.SetAntiFling(Config.AntiFlingEnabled) end
         if UIControls.SetDesyncAntiAim then UIControls.SetDesyncAntiAim(Config.DesyncAntiAimEnabled) end
+        if UIControls.ThrowKnifeSwitch then UIControls.ThrowKnifeSwitch:SetInstant(Config.ThrowKnifeEnabled, false) end
+        if UIControls.SetThrowKnifeEnabled then UIControls.SetThrowKnifeEnabled(Config.ThrowKnifeEnabled) end
         if UIControls.FunctionsHUDSwitch then UIControls.FunctionsHUDSwitch:SetInstant(Config.FunctionsHUDEnabled, false) end
         if UIControls.SetWalkSpeedValue then UIControls.SetWalkSpeedValue(Config.WalkSpeedValue) end
         if UIControls.SetLongJumpSpeed then UIControls.SetLongJumpSpeed(Config.LongJumpSpeed) end
@@ -5703,6 +5791,7 @@ do
         if Config.CoinFarmEnabled then table.insert(names, "Coin Farm  " .. tostring(Config.CoinFarmSpeed)) end
         if Config.AntiFlingEnabled then table.insert(names, "Anti Fling") end
         if Config.DesyncAntiAimEnabled then table.insert(names, "Anti Aim") end
+        if Config.ThrowKnifeEnabled then table.insert(names, "Throw a Knife") end
         return names
     end
 
@@ -6532,6 +6621,348 @@ local function GetRoleColor(role)
     if role == "Innocent" then return Config.Innocent end
     return Config.Unknown
 end
+
+
+--// ============================================================
+--// MURDERER - THROW A KNIFE
+--// ============================================================
+
+UIControls.SetupMurderThrowEngine = function()
+    local BASE_PLAYER_SPEED = 16
+    local lastThrowAt = 0
+
+    local function setStatus(message)
+        if UIControls.CombatStatus then
+            UIControls.CombatStatus.Text = message
+        end
+    end
+
+    local function getAliveTarget()
+        local myCharacter = LocalPlayer.Character
+        local myRoot = myCharacter and myCharacter:FindFirstChild("HumanoidRootPart")
+        if not myRoot then return nil end
+
+        local nearestPlayer = nil
+        local nearestDistance = math.huge
+
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then
+                local character = player.Character
+                local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+                local root = character and character:FindFirstChild("HumanoidRootPart")
+
+                if humanoid and humanoid.Health > 0 and root and not root.Anchored then
+                    local distance = (root.Position - myRoot.Position).Magnitude
+                    if distance < nearestDistance then
+                        nearestDistance = distance
+                        nearestPlayer = player
+                    end
+                end
+            end
+        end
+
+        return nearestPlayer, nearestDistance
+    end
+
+    local function getKnife()
+        local character = LocalPlayer.Character
+        local backpack = LocalPlayer:FindFirstChild("Backpack")
+
+        local knife = character and character:FindFirstChild("Knife")
+        if not knife and backpack then
+            knife = backpack:FindFirstChild("Knife")
+        end
+
+        return knife
+    end
+
+    local function getPrediction(targetRoot, targetHumanoid, origin, throwSpeed)
+        local distance = (targetRoot.Position - origin).Magnitude
+
+        local ping = 0
+        pcall(function()
+            ping = LocalPlayer:GetNetworkPing()
+        end)
+        if type(ping) ~= "number" or ping < 0 or ping > 5 then
+            ping = 0
+        end
+
+        -- Projectile travel + approximate local -> server one-way latency.
+        local travelTime = distance / math.max(1, throwSpeed)
+        local predictTime = math.clamp(travelTime + ping * 0.5, 0.02, 0.80)
+
+        local velocity = targetRoot.AssemblyLinearVelocity
+        local horizontal = Vector3.new(velocity.X, 0, velocity.Z)
+        local moveDirection = targetHumanoid.MoveDirection
+
+        -- Normal MM2 player speed is 16. Use it as the fallback when replicated
+        -- AssemblyLinearVelocity is too small/noisy while the player is moving.
+        if moveDirection.Magnitude > 0.05 then
+            if horizontal.Magnitude < 4 then
+                horizontal = moveDirection.Unit * BASE_PLAYER_SPEED
+            elseif horizontal.Magnitude > 42 then
+                horizontal = horizontal.Unit * 42
+            end
+        elseif horizontal.Magnitude < 1 then
+            horizontal = Vector3.zero
+        end
+
+        local predicted = targetRoot.Position + horizontal * predictTime
+
+        -- Jump prediction: use current vertical velocity and gravity while airborne.
+        if targetHumanoid.FloorMaterial == Enum.Material.Air then
+            local verticalVelocity = math.clamp(velocity.Y, -90, 90)
+            local verticalOffset = verticalVelocity * predictTime
+                - 0.5 * workspace.Gravity * predictTime * predictTime
+
+            verticalOffset = math.clamp(verticalOffset, -22, 22)
+            predicted = Vector3.new(
+                predicted.X,
+                targetRoot.Position.Y + verticalOffset,
+                predicted.Z
+            )
+        end
+
+        return predicted, predictTime
+    end
+
+    UIControls.ThrowKnifeNearest = function()
+        if not Config.ThrowKnifeEnabled then
+            setStatus("Enable Throw a Knife first")
+            return false
+        end
+
+        -- Prevent a single touch from firing twice; the first throw is immediate.
+        if os.clock() - lastThrowAt < 0.06 then
+            return false
+        end
+        lastThrowAt = os.clock()
+
+        local character = LocalPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if not character or not humanoid or humanoid.Health <= 0 then
+            setStatus("Character is not ready")
+            return false
+        end
+
+        local knife = getKnife()
+        if not knife then
+            setStatus("Knife not found")
+            return false
+        end
+
+        if knife.Parent ~= character then
+            pcall(function()
+                humanoid:EquipTool(knife)
+            end)
+        end
+
+        local handle = knife:FindFirstChild("Handle")
+        local events = knife:FindFirstChild("Events")
+        local knifeThrown = events and events:FindFirstChild("KnifeThrown")
+
+        if not handle or not knifeThrown or not knifeThrown:IsA("RemoteEvent") then
+            setStatus("Knife throw event is unavailable")
+            return false
+        end
+
+        local target, distance = getAliveTarget()
+        if not target then
+            setStatus("No living target")
+            return false
+        end
+
+        local targetCharacter = target.Character
+        local targetHumanoid = targetCharacter and targetCharacter:FindFirstChildOfClass("Humanoid")
+        local targetRoot = targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart")
+        if not targetHumanoid or not targetRoot then
+            setStatus("Target is not ready")
+            return false
+        end
+
+        local throwSpeed = tonumber(knife:GetAttribute("ThrowSpeed")) or 100
+        local predictedPosition, predictTime = getPrediction(
+            targetRoot,
+            targetHumanoid,
+            handle.Position,
+            throwSpeed
+        )
+
+        local targetCFrame = CFrame.new(predictedPosition)
+
+        local ok, err = pcall(function()
+            -- Exact KnifeClient remote signature:
+            -- KnifeThrown:FireServer(Handle.CFrame, targetCFrame)
+            knifeThrown:FireServer(handle.CFrame, targetCFrame)
+        end)
+
+        if ok then
+            setStatus(string.format(
+                "Knife -> %s | %.0f studs | %.0f ms predict",
+                target.DisplayName,
+                distance or 0,
+                predictTime * 1000
+            ))
+        else
+            setStatus("Knife throw failed: " .. tostring(err))
+        end
+
+        return ok
+    end
+
+    local function createMobileButton()
+        if UIControls.ThrowKnifeMobileRoot and UIControls.ThrowKnifeMobileRoot.Parent then
+            return
+        end
+
+        local root = New("Frame", {
+            Name = "ThrowKnifeMobile",
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.fromScale(0.82, 0.72),
+            Size = UDim2.fromOffset(112, 52),
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            Visible = false,
+            ZIndex = 600,
+        })
+        root.Parent = Gui
+        UIControls.ThrowKnifeMobileRoot = root
+
+        local button = New("TextButton", {
+            Name = "Throw",
+            Position = UDim2.fromOffset(0, 0),
+            Size = UDim2.fromOffset(82, 52),
+            BackgroundColor3 = Color3.fromRGB(72, 37, 47),
+            BackgroundTransparency = 0.10,
+            BorderSizePixel = 0,
+            Text = "THROW",
+            TextColor3 = Config.Text,
+            TextSize = 11,
+            Font = Enum.Font.GothamBold,
+            AutoButtonColor = false,
+            Active = true,
+            ZIndex = 601,
+        })
+        button.Parent = root
+        Corner(button, 14)
+        Stroke(button, Color3.fromRGB(125, 64, 76), 0.18, 1)
+
+        local lockButton = New("TextButton", {
+            Name = "Lock",
+            Position = UDim2.fromOffset(87, 11),
+            Size = UDim2.fromOffset(25, 30),
+            BackgroundColor3 = Config.Panel2,
+            BackgroundTransparency = 0.06,
+            BorderSizePixel = 0,
+            Text = "MOVE",
+            TextColor3 = Config.Muted,
+            TextSize = 6,
+            Font = Enum.Font.GothamBold,
+            AutoButtonColor = false,
+            ZIndex = 602,
+        })
+        lockButton.Parent = root
+        Corner(lockButton, 9)
+        Stroke(lockButton, Config.Border, 0.12, 1)
+
+        local locked = false
+        local dragging = false
+        local moved = false
+        local activeInput = nil
+        local dragStart = nil
+        local startPosition = nil
+
+        local function setLocked(value)
+            locked = value == true
+            lockButton.Text = locked and "LOCK" or "MOVE"
+            lockButton.TextColor3 = locked and Config.WaterBright or Config.Muted
+        end
+
+        Connect(lockButton.MouseButton1Click, function()
+            PlayClickSound()
+            setLocked(not locked)
+        end)
+
+        Connect(button.InputBegan, function(input)
+            if input.UserInputType ~= Enum.UserInputType.Touch
+                and input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+                return
+            end
+
+            dragging = true
+            moved = false
+            activeInput = input
+            dragStart = input.Position
+            startPosition = root.Position
+        end)
+
+        Connect(button.InputChanged, function(input)
+            if input.UserInputType == Enum.UserInputType.Touch
+                or input.UserInputType == Enum.UserInputType.MouseMovement then
+                activeInput = input
+            end
+        end)
+
+        Connect(UserInputService.InputChanged, function(input)
+            if not dragging or locked or input ~= activeInput or not dragStart or not startPosition then
+                return
+            end
+
+            local delta = input.Position - dragStart
+            if delta.Magnitude > 8 then
+                moved = true
+            end
+
+            root.Position = UDim2.new(
+                startPosition.X.Scale,
+                startPosition.X.Offset + delta.X,
+                startPosition.Y.Scale,
+                startPosition.Y.Offset + delta.Y
+            )
+        end)
+
+        Connect(UserInputService.InputEnded, function(input)
+            if not dragging then return end
+            if input.UserInputType ~= Enum.UserInputType.Touch
+                and input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+                return
+            end
+
+            dragging = false
+
+            if not moved then
+                PlayClickSound()
+                UIControls.ThrowKnifeNearest()
+            end
+
+            moved = false
+            activeInput = nil
+            dragStart = nil
+            startPosition = nil
+        end)
+
+        setLocked(false)
+    end
+
+    UIControls.SetThrowKnifeEnabled = function(value)
+        Config.ThrowKnifeEnabled = value == true
+
+        if UserInputService.TouchEnabled then
+            createMobileButton()
+            if UIControls.ThrowKnifeMobileRoot then
+                UIControls.ThrowKnifeMobileRoot.Visible = Config.ThrowKnifeEnabled
+            end
+        end
+    end
+
+    if UserInputService.TouchEnabled then
+        createMobileButton()
+    end
+
+    UIControls.SetThrowKnifeEnabled(Config.ThrowKnifeEnabled)
+end
+
+UIControls.SetupMurderThrowEngine()
 
 
 --// ============================================================

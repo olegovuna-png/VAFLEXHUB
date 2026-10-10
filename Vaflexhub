@@ -2366,6 +2366,10 @@ UIControls.SetupCombatPage = function()
 
         UIControls.CombatManualSelection = false
         UIControls.SelectCombatSubtab(targetTab, false)
+
+        if UIControls.RefreshCombatMobileButtons then
+            UIControls.RefreshCombatMobileButtons()
+        end
     end
 
     UIControls.SelectCombatSubtab("Universal", false)
@@ -6821,28 +6825,30 @@ UIControls.SetupMurderThrowEngine = function()
         return predicted, predictTime
     end
 
-    UIControls.ThrowKnifeNearest = function()
-        if not Config.ThrowKnifeEnabled then
-            setStatus("Enable Throw a Knife first")
-            return false
-        end
-
-        -- Prevent a single touch from firing twice; the first throw is immediate.
-        if os.clock() - lastThrowAt < 0.06 then
-            return false
-        end
-        lastThrowAt = os.clock()
-
+    local function fireKnifeAtPlayer(target, updateStatus)
         local character = LocalPlayer.Character
         local humanoid = character and character:FindFirstChildOfClass("Humanoid")
         if not character or not humanoid or humanoid.Health <= 0 then
-            setStatus("Character is not ready")
+            if updateStatus ~= false then setStatus("Character is not ready") end
+            return false
+        end
+
+        if not target or target == LocalPlayer or target.Parent ~= Players then
+            if updateStatus ~= false then setStatus("Target is not ready") end
+            return false
+        end
+
+        local targetCharacter = target.Character
+        local targetHumanoid = targetCharacter and targetCharacter:FindFirstChildOfClass("Humanoid")
+        local targetRoot = targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart")
+        if not targetHumanoid or targetHumanoid.Health <= 0 or not targetRoot or targetRoot.Anchored then
+            if updateStatus ~= false then setStatus("Target is not ready") end
             return false
         end
 
         local knife = getKnife()
         if not knife then
-            setStatus("Knife not found")
+            if updateStatus ~= false then setStatus("Knife not found") end
             return false
         end
 
@@ -6850,28 +6856,17 @@ UIControls.SetupMurderThrowEngine = function()
             pcall(function()
                 humanoid:EquipTool(knife)
             end)
+            task.wait()
         end
 
-        local handle = knife:FindFirstChild("Handle")
-        local events = knife:FindFirstChild("Events")
+        -- Re-read after EquipTool because MM2 can move the Tool/Handle.
+        knife = getKnife() or knife
+        local handle = knife and knife:FindFirstChild("Handle")
+        local events = knife and knife:FindFirstChild("Events")
         local knifeThrown = events and events:FindFirstChild("KnifeThrown")
 
         if not handle or not knifeThrown or not knifeThrown:IsA("RemoteEvent") then
-            setStatus("Knife throw event is unavailable")
-            return false
-        end
-
-        local target, distance = getAliveTarget()
-        if not target then
-            setStatus("No living target")
-            return false
-        end
-
-        local targetCharacter = target.Character
-        local targetHumanoid = targetCharacter and targetCharacter:FindFirstChildOfClass("Humanoid")
-        local targetRoot = targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart")
-        if not targetHumanoid or not targetRoot then
-            setStatus("Target is not ready")
+            if updateStatus ~= false then setStatus("Knife throw event is unavailable") end
             return false
         end
 
@@ -6883,32 +6878,63 @@ UIControls.SetupMurderThrowEngine = function()
             throwSpeed
         )
 
-        local targetCFrame = CFrame.new(predictedPosition)
-
         local ok, err = pcall(function()
-            -- Exact KnifeClient remote signature:
-            -- KnifeThrown:FireServer(Handle.CFrame, targetCFrame)
-            knifeThrown:FireServer(handle.CFrame, targetCFrame)
+            knifeThrown:FireServer(
+                handle.CFrame,
+                CFrame.new(predictedPosition)
+            )
         end)
 
-        if ok then
-            setStatus(string.format(
-                "Knife -> %s | %.0f studs | %.0f ms predict",
-                target.DisplayName,
-                distance or 0,
-                predictTime * 1000
-            ))
-        else
-            setStatus("Knife throw failed: " .. tostring(err))
+        if updateStatus ~= false then
+            if ok then
+                local myRoot = character:FindFirstChild("HumanoidRootPart")
+                local distance = myRoot and (targetRoot.Position - myRoot.Position).Magnitude or 0
+                setStatus(string.format(
+                    "Knife -> %s | %.0f studs | %.0f ms predict",
+                    target.DisplayName,
+                    distance,
+                    predictTime * 1000
+                ))
+            else
+                setStatus("Knife throw failed: " .. tostring(err))
+            end
         end
 
         return ok
     end
 
+    UIControls.ThrowKnifeNearest = function()
+        if not Config.ThrowKnifeEnabled then
+            setStatus("Enable Throw a Knife first")
+            return false
+        end
+
+        -- First press is immediate; only blocks accidental duplicate touch events.
+        if os.clock() - lastThrowAt < 0.055 then
+            return false
+        end
+        lastThrowAt = os.clock()
+
+        local target = getAliveTarget()
+        if not target then
+            setStatus("No living target")
+            return false
+        end
+
+        return fireKnifeAtPlayer(target, true)
+    end
+
     UIControls.KillAllMurder = function()
+        if UIControls.KillAllBusy then
+            setStatus("Kill All is already running")
+            return false
+        end
+
         local character = LocalPlayer.Character
         local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-        if not character or not humanoid or humanoid.Health <= 0 then
+        local myRoot = character and character:FindFirstChild("HumanoidRootPart")
+
+        if not character or not humanoid or humanoid.Health <= 0 or not myRoot then
             setStatus("Character is not ready")
             return false
         end
@@ -6923,18 +6949,16 @@ UIControls.SetupMurderThrowEngine = function()
             pcall(function()
                 humanoid:EquipTool(knife)
             end)
+            task.wait()
         end
 
-        local handle = knife:FindFirstChild("Handle")
-        local events = knife:FindFirstChild("Events")
-        local knifeThrown = events and events:FindFirstChild("KnifeThrown")
-
-        if not handle or not knifeThrown or not knifeThrown:IsA("RemoteEvent") then
-            setStatus("Knife throw event is unavailable")
+        knife = getKnife() or knife
+        local handle = knife and knife:FindFirstChild("Handle")
+        if not handle then
+            setStatus("Knife handle not found")
             return false
         end
 
-        local throwSpeed = tonumber(knife:GetAttribute("ThrowSpeed")) or 100
         local targets = {}
 
         for _, player in ipairs(Players:GetPlayers()) do
@@ -6943,11 +6967,22 @@ UIControls.SetupMurderThrowEngine = function()
                 local targetHumanoid = targetCharacter and targetCharacter:FindFirstChildOfClass("Humanoid")
                 local targetRoot = targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart")
 
-                if targetHumanoid and targetHumanoid.Health > 0 and targetRoot and not targetRoot.Anchored then
+                if targetCharacter
+                    and targetHumanoid
+                    and targetHumanoid.Health > 0
+                    and targetRoot
+                    and not targetRoot.Anchored then
+
+                    local ok, pivot = pcall(function()
+                        return targetCharacter:GetPivot()
+                    end)
+
                     table.insert(targets, {
                         Player = player,
+                        Character = targetCharacter,
                         Humanoid = targetHumanoid,
                         Root = targetRoot,
+                        OriginalPivot = ok and pivot or targetRoot.CFrame,
                     })
                 end
             end
@@ -6958,32 +6993,107 @@ UIControls.SetupMurderThrowEngine = function()
             return false
         end
 
-        setStatus("Kill All -> " .. tostring(#targets) .. " targets")
+        UIControls.KillAllBusy = true
+        setStatus("Kill All: bringing " .. tostring(#targets) .. " players")
 
-        -- Fire one predicted knife packet per living target from a single click.
-        -- There is no local charge delay between targets.
+        local restoreAntiAim = Config.DesyncAntiAimEnabled == true
+        if restoreAntiAim and UIControls.SetDesyncAntiAim then
+            pcall(function()
+                UIControls.SetDesyncAntiAim(false)
+            end)
+        end
+
         task.spawn(function()
-            for _, data in ipairs(targets) do
-                if not Running or not knife.Parent or not handle.Parent then
-                    break
-                end
-
-                if data.Humanoid.Parent and data.Humanoid.Health > 0 and data.Root.Parent then
-                    local predictedPosition = getPrediction(
-                        data.Root,
-                        data.Humanoid,
-                        handle.Position,
-                        throwSpeed
-                    )
+            -- Stack everybody directly in the murderer's melee range.
+            for index, data in ipairs(targets) do
+                if data.Character.Parent and data.Humanoid.Health > 0 then
+                    local x = ((index - 1) % 3 - 1) * 0.30
+                    local z = -1.45 - math.floor((index - 1) / 3) * 0.10
 
                     pcall(function()
-                        knifeThrown:FireServer(
-                            handle.CFrame,
-                            CFrame.new(predictedPosition)
+                        data.Character:PivotTo(
+                            myRoot.CFrame * CFrame.new(x, 0, z)
                         )
+                        data.Root.AssemblyLinearVelocity = Vector3.zero
+                        data.Root.AssemblyAngularVelocity = Vector3.zero
                     end)
                 end
             end
+
+            RunService.Heartbeat:Wait()
+
+            -- One slash for the entire stack.
+            pcall(function()
+                knife:Activate()
+            end)
+
+            -- Optional executor touch helper. If available, register every stacked
+            -- character against the knife during that same slash.
+            local touch = nil
+
+            pcall(function()
+                if type(getgenv) == "function" then
+                    touch = getgenv()["firetouchinterest"]
+                end
+            end)
+
+            if type(touch) ~= "function" then
+                pcall(function()
+                    if type(getfenv) == "function" then
+                        touch = getfenv()["firetouchinterest"]
+                    end
+                end)
+            end
+
+            if type(touch) ~= "function" then
+                pcall(function()
+                    touch = _G["firetouchinterest"]
+                end)
+            end
+
+            if type(touch) == "function" then
+                for _, data in ipairs(targets) do
+                    if data.Root.Parent and data.Humanoid.Health > 0 then
+                        pcall(function()
+                            touch(handle, data.Root, 0)
+                            touch(handle, data.Root, 1)
+                        end)
+
+                        local head = data.Character:FindFirstChild("Head")
+                        if head and head:IsA("BasePart") then
+                            pcall(function()
+                                touch(handle, head, 0)
+                                touch(handle, head, 1)
+                            end)
+                        end
+                    end
+                end
+            end
+
+            task.wait(0.12)
+
+            for _, data in ipairs(targets) do
+                if data.Character.Parent and data.Humanoid.Health > 0 then
+                    pcall(function()
+                        if typeof(data.OriginalPivot) == "CFrame" then
+                            data.Character:PivotTo(data.OriginalPivot)
+                        end
+                    end)
+                end
+            end
+
+            if restoreAntiAim and Running and UIControls.SetDesyncAntiAim then
+                task.delay(0.12, function()
+                    if Running then
+                        pcall(function()
+                            UIControls.SetDesyncAntiAim(true)
+                        end)
+                    end
+                end)
+            end
+
+            UIControls.KillAllBusy = false
+            setStatus("Kill All finished • one slash")
         end)
 
         return true
@@ -7130,7 +7240,12 @@ UIControls.SetupMurderThrowEngine = function()
             createMobileButton()
             if UIControls.ThrowKnifeMobileRoot then
                 UIControls.ThrowKnifeMobileRoot.Visible = Config.ThrowKnifeEnabled
+                    and UIControls.LastCombatRole == "Murderer"
             end
+        end
+
+        if UIControls.RefreshCombatMobileButtons then
+            UIControls.RefreshCombatMobileButtons()
         end
     end
 
@@ -7430,6 +7545,186 @@ UIControls.SetupSheriffEngine = function()
 
         return ok
     end
+    local function createMobileActionButton(controlKey, name, label, position, callback)
+        local existing = UIControls[controlKey]
+        if existing and existing.Parent then
+            return existing
+        end
+
+        local root = New("Frame", {
+            Name = name,
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = position,
+            Size = UDim2.fromOffset(126, 52),
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            Visible = false,
+            ZIndex = 610,
+        })
+        root.Parent = Gui
+        UIControls[controlKey] = root
+
+        local action = New("TextButton", {
+            Name = "Action",
+            Position = UDim2.fromOffset(0, 0),
+            Size = UDim2.fromOffset(94, 52),
+            BackgroundColor3 = Color3.fromRGB(38, 61, 91),
+            BackgroundTransparency = 0.10,
+            BorderSizePixel = 0,
+            Text = label,
+            TextColor3 = Config.Text,
+            TextSize = label == "GET GUN" and 9 or 10,
+            Font = Enum.Font.GothamBold,
+            AutoButtonColor = false,
+            Active = true,
+            ZIndex = 611,
+        })
+        action.Parent = root
+        Corner(action, 14)
+        Stroke(action, Color3.fromRGB(67, 102, 143), 0.18, 1)
+
+        local lockButton = New("TextButton", {
+            Name = "Lock",
+            Position = UDim2.fromOffset(99, 11),
+            Size = UDim2.fromOffset(27, 30),
+            BackgroundColor3 = Config.Panel2,
+            BackgroundTransparency = 0.06,
+            BorderSizePixel = 0,
+            Text = "MOVE",
+            TextColor3 = Config.Muted,
+            TextSize = 6,
+            Font = Enum.Font.GothamBold,
+            AutoButtonColor = false,
+            ZIndex = 612,
+        })
+        lockButton.Parent = root
+        Corner(lockButton, 9)
+        Stroke(lockButton, Config.Border, 0.12, 1)
+
+        local locked = false
+        local dragging = false
+        local moved = false
+        local activeInput = nil
+        local dragStart = nil
+        local startPosition = nil
+
+        local function setLocked(value)
+            locked = value == true
+            lockButton.Text = locked and "LOCK" or "MOVE"
+            lockButton.TextColor3 = locked and Config.WaterBright or Config.Muted
+        end
+
+        Connect(lockButton.MouseButton1Click, function()
+            PlayClickSound()
+            setLocked(not locked)
+        end)
+
+        Connect(action.InputBegan, function(input)
+            if input.UserInputType ~= Enum.UserInputType.Touch
+                and input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+                return
+            end
+
+            dragging = true
+            moved = false
+            activeInput = input
+            dragStart = input.Position
+            startPosition = root.Position
+        end)
+
+        Connect(action.InputChanged, function(input)
+            if input.UserInputType == Enum.UserInputType.Touch
+                or input.UserInputType == Enum.UserInputType.MouseMovement then
+                activeInput = input
+            end
+        end)
+
+        Connect(UserInputService.InputChanged, function(input)
+            if not dragging or locked or input ~= activeInput or not dragStart or not startPosition then
+                return
+            end
+
+            local delta = input.Position - dragStart
+            if delta.Magnitude > 8 then
+                moved = true
+            end
+
+            root.Position = UDim2.new(
+                startPosition.X.Scale,
+                startPosition.X.Offset + delta.X,
+                startPosition.Y.Scale,
+                startPosition.Y.Offset + delta.Y
+            )
+        end)
+
+        Connect(UserInputService.InputEnded, function(input)
+            if not dragging then return end
+            if input.UserInputType ~= Enum.UserInputType.Touch
+                and input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+                return
+            end
+
+            dragging = false
+
+            if not moved then
+                PlayClickSound()
+                callback()
+            end
+
+            moved = false
+            activeInput = nil
+            dragStart = nil
+            startPosition = nil
+        end)
+
+        setLocked(false)
+        return root
+    end
+
+    if UserInputService.TouchEnabled then
+        createMobileActionButton(
+            "GetGunMobileRoot",
+            "VAFLEX_GetGunMobile",
+            "GET GUN",
+            UDim2.fromScale(0.82, 0.58),
+            function()
+                UIControls.GetDroppedGun()
+            end
+        )
+
+        createMobileActionButton(
+            "ShootMurdererMobileRoot",
+            "VAFLEX_ShootMurdererMobile",
+            "SHOOT",
+            UDim2.fromScale(0.82, 0.66),
+            function()
+                UIControls.ShootMurdererSilent()
+            end
+        )
+    end
+
+    UIControls.RefreshCombatMobileButtons = function()
+        if not UserInputService.TouchEnabled then return end
+
+        local role = UIControls.LastCombatRole or "Unknown"
+        local sheriffVisible = role == "Sheriff" or role == "Hero"
+
+        if UIControls.GetGunMobileRoot then
+            UIControls.GetGunMobileRoot.Visible = sheriffVisible
+        end
+
+        if UIControls.ShootMurdererMobileRoot then
+            UIControls.ShootMurdererMobileRoot.Visible = sheriffVisible
+        end
+
+        if UIControls.ThrowKnifeMobileRoot then
+            UIControls.ThrowKnifeMobileRoot.Visible = Config.ThrowKnifeEnabled
+                and role == "Murderer"
+        end
+    end
+
+    UIControls.RefreshCombatMobileButtons()
+
 end
 
 UIControls.SetupSheriffEngine()

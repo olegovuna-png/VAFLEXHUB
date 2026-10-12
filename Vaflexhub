@@ -86,6 +86,10 @@ local Config = {
     -- Murderer
     ThrowKnifeEnabled = false,
 
+    -- Sheriff / Hero
+    GetGunEnabled = false,
+    ShootMurdererEnabled = false,
+
     -- Small on-screen list of currently enabled functions
     FunctionsHUDEnabled = false,
 
@@ -2085,63 +2089,141 @@ UIControls.SetupCombatPage = function()
     end
 
     do
-        local getGun = New("TextButton", {
-            Name = "GetGun",
+        local getGunRow = New("Frame", {
+            Name = "GetGunRow",
             Position = UDim2.fromOffset(0, 0),
-            Size = UDim2.new(1, 0, 0, 42),
-            BackgroundColor3 = Color3.fromRGB(38, 61, 91),
-            BackgroundTransparency = 0.14,
+            Size = UDim2.new(1, 0, 0, 46),
+            BackgroundColor3 = Config.Panel2,
+            BackgroundTransparency = 0.05,
             BorderSizePixel = 0,
+            ZIndex = 106,
+        })
+        getGunRow.Parent = sheriffPage
+        Corner(getGunRow, 11)
+        Stroke(getGunRow, Config.Border, 0.12, 1)
+
+        local getGunTitle = New("TextLabel", {
+            Position = UDim2.fromOffset(13, 0),
+            Size = UDim2.new(1, -88, 1, 0),
+            BackgroundTransparency = 1,
             Text = "Get Gun",
             TextColor3 = Config.Text,
             TextSize = 10,
+            Font = Enum.Font.GothamSemibold,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 107,
+        })
+        getGunTitle.Parent = getGunRow
+
+        UIControls.GetGunSwitch = CreateSwitch(
+            getGunRow,
+            UDim2.new(1, -9, 0.5, 0),
+            Config.GetGunEnabled,
+            function(value)
+                Config.GetGunEnabled = value
+                if UIControls.RefreshCombatMobileButtons then
+                    UIControls.RefreshCombatMobileButtons()
+                end
+            end
+        )
+
+        local getGun = New("TextButton", {
+            Name = "GetGun",
+            Position = UDim2.fromOffset(0, 52),
+            Size = UDim2.new(1, 0, 0, 34),
+            BackgroundColor3 = Color3.fromRGB(38, 61, 91),
+            BackgroundTransparency = 0.14,
+            BorderSizePixel = 0,
+            Text = "Get Gun Now",
+            TextColor3 = Config.Text,
+            TextSize = 9,
             Font = Enum.Font.GothamBold,
             AutoButtonColor = false,
             ZIndex = 107,
         })
         getGun.Parent = sheriffPage
-        Corner(getGun, 11)
+        Corner(getGun, 10)
         Stroke(getGun, Config.Border, 0.12, 1)
 
         Connect(getGun.MouseButton1Click, function()
             PlayClickSound()
+            if not Config.GetGunEnabled then return end
             if UIControls.GetDroppedGun then
                 UIControls.GetDroppedGun()
             end
         end)
 
-        local shootMurderer = New("TextButton", {
-            Name = "ShootMurderer",
-            Position = UDim2.fromOffset(0, 50),
-            Size = UDim2.new(1, 0, 0, 42),
-            BackgroundColor3 = Color3.fromRGB(43, 72, 106),
-            BackgroundTransparency = 0.10,
+        local shootRow = New("Frame", {
+            Name = "ShootMurdererRow",
+            Position = UDim2.fromOffset(0, 94),
+            Size = UDim2.new(1, 0, 0, 46),
+            BackgroundColor3 = Config.Panel2,
+            BackgroundTransparency = 0.05,
             BorderSizePixel = 0,
+            ZIndex = 106,
+        })
+        shootRow.Parent = sheriffPage
+        Corner(shootRow, 11)
+        Stroke(shootRow, Config.Border, 0.12, 1)
+
+        local shootTitle = New("TextLabel", {
+            Position = UDim2.fromOffset(13, 0),
+            Size = UDim2.new(1, -88, 1, 0),
+            BackgroundTransparency = 1,
             Text = "Shoot Murderer",
             TextColor3 = Config.Text,
             TextSize = 10,
+            Font = Enum.Font.GothamSemibold,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 107,
+        })
+        shootTitle.Parent = shootRow
+
+        UIControls.ShootMurdererSwitch = CreateSwitch(
+            shootRow,
+            UDim2.new(1, -9, 0.5, 0),
+            Config.ShootMurdererEnabled,
+            function(value)
+                Config.ShootMurdererEnabled = value
+                if UIControls.RefreshCombatMobileButtons then
+                    UIControls.RefreshCombatMobileButtons()
+                end
+            end
+        )
+
+        local shootMurderer = New("TextButton", {
+            Name = "ShootMurderer",
+            Position = UDim2.fromOffset(0, 146),
+            Size = UDim2.new(1, 0, 0, 34),
+            BackgroundColor3 = Color3.fromRGB(43, 72, 106),
+            BackgroundTransparency = 0.10,
+            BorderSizePixel = 0,
+            Text = "Shoot Murderer Now",
+            TextColor3 = Config.Text,
+            TextSize = 9,
             Font = Enum.Font.GothamBold,
             AutoButtonColor = false,
             ZIndex = 107,
         })
         shootMurderer.Parent = sheriffPage
-        Corner(shootMurderer, 11)
+        Corner(shootMurderer, 10)
         Stroke(shootMurderer, Config.Border, 0.12, 1)
 
         Connect(shootMurderer.MouseButton1Click, function()
             PlayClickSound()
+            if not Config.ShootMurdererEnabled then return end
             if UIControls.ShootMurdererSilent then
                 UIControls.ShootMurdererSilent()
             end
         end)
 
         local sheriffStatus = New("TextLabel", {
-            Position = UDim2.fromOffset(4, 100),
-            Size = UDim2.new(1, -8, 0, 30),
+            Position = UDim2.fromOffset(4, 188),
+            Size = UDim2.new(1, -8, 0, 34),
             BackgroundTransparency = 1,
-            Text = "Sheriff tools ready",
+            Text = "Get Gun: Innocent only • Shoot: Sheriff / Hero only",
             TextColor3 = Config.Muted,
-            TextSize = 8,
+            TextSize = 7,
             Font = Enum.Font.Gotham,
             TextWrapped = true,
             TextXAlignment = Enum.TextXAlignment.Left,
@@ -5229,6 +5311,8 @@ do
         AntiFlingEnabled = false,
         DesyncAntiAimEnabled = false,
         ThrowKnifeEnabled = false,
+        GetGunEnabled = false,
+        ShootMurdererEnabled = false,
         FunctionsHUDEnabled = false,
     }
 
@@ -5265,6 +5349,8 @@ do
             AntiFlingEnabled = Config.AntiFlingEnabled,
             DesyncAntiAimEnabled = Config.DesyncAntiAimEnabled,
             ThrowKnifeEnabled = Config.ThrowKnifeEnabled,
+            GetGunEnabled = Config.GetGunEnabled,
+            ShootMurdererEnabled = Config.ShootMurdererEnabled,
             FunctionsHUDEnabled = Config.FunctionsHUDEnabled,
         }
     end
@@ -5305,6 +5391,8 @@ do
         Config.AntiFlingEnabled = snapshot.AntiFlingEnabled == true
         Config.DesyncAntiAimEnabled = snapshot.DesyncAntiAimEnabled == true
         Config.ThrowKnifeEnabled = snapshot.ThrowKnifeEnabled == true
+        Config.GetGunEnabled = snapshot.GetGunEnabled == true
+        Config.ShootMurdererEnabled = snapshot.ShootMurdererEnabled == true
         Config.FunctionsHUDEnabled = snapshot.FunctionsHUDEnabled == true
 
         UIControls.RoleSwitch:SetInstant(Config.RoleESP, false)
@@ -5334,6 +5422,9 @@ do
         if UIControls.SetDesyncAntiAim then UIControls.SetDesyncAntiAim(Config.DesyncAntiAimEnabled) end
         if UIControls.ThrowKnifeSwitch then UIControls.ThrowKnifeSwitch:SetInstant(Config.ThrowKnifeEnabled, false) end
         if UIControls.SetThrowKnifeEnabled then UIControls.SetThrowKnifeEnabled(Config.ThrowKnifeEnabled) end
+        if UIControls.GetGunSwitch then UIControls.GetGunSwitch:SetInstant(Config.GetGunEnabled, false) end
+        if UIControls.ShootMurdererSwitch then UIControls.ShootMurdererSwitch:SetInstant(Config.ShootMurdererEnabled, false) end
+        if UIControls.RefreshCombatMobileButtons then UIControls.RefreshCombatMobileButtons() end
         if UIControls.FunctionsHUDSwitch then UIControls.FunctionsHUDSwitch:SetInstant(Config.FunctionsHUDEnabled, false) end
         if UIControls.SetWalkSpeedValue then UIControls.SetWalkSpeedValue(Config.WalkSpeedValue) end
         if UIControls.SetLongJumpSpeed then UIControls.SetLongJumpSpeed(Config.LongJumpSpeed) end
@@ -5891,6 +5982,8 @@ do
         if Config.AntiFlingEnabled then table.insert(names, "Anti Fling") end
         if Config.DesyncAntiAimEnabled then table.insert(names, "Anti Aim") end
         if Config.ThrowKnifeEnabled then table.insert(names, "Throw a Knife") end
+        if Config.GetGunEnabled then table.insert(names, "Get Gun") end
+        if Config.ShootMurdererEnabled then table.insert(names, "Shoot Murderer") end
         return names
     end
 
@@ -7338,6 +7431,22 @@ UIControls.SetupSheriffEngine = function()
     end
 
     UIControls.GetDroppedGun = function()
+        if not Config.GetGunEnabled then
+            setSheriffStatus("Enable Get Gun first")
+            return false
+        end
+
+        RefreshRemoteRoles()
+        local currentRole = GetRole(LocalPlayer)
+        if currentRole == "Unknown" then
+            currentRole = UIControls.LastCombatRole or "Unknown"
+        end
+
+        if currentRole ~= "Innocent" then
+            setSheriffStatus("Get Gun is available only as Innocent")
+            return false
+        end
+
         if UIControls.TeleportBusy then
             setSheriffStatus("Get Gun is already running")
             return false
@@ -7474,6 +7583,22 @@ UIControls.SetupSheriffEngine = function()
     end
 
     UIControls.ShootMurdererSilent = function()
+        if not Config.ShootMurdererEnabled then
+            setSheriffStatus("Enable Shoot Murderer first")
+            return false
+        end
+
+        RefreshRemoteRoles()
+        local currentRole = GetRole(LocalPlayer)
+        if currentRole == "Unknown" then
+            currentRole = UIControls.LastCombatRole or "Unknown"
+        end
+
+        if currentRole ~= "Sheriff" and currentRole ~= "Hero" then
+            setSheriffStatus("Shoot Murderer is Sheriff / Hero only")
+            return false
+        end
+
         local character = LocalPlayer.Character
         local humanoid = character and character:FindFirstChildOfClass("Humanoid")
         if not character or not humanoid or humanoid.Health <= 0 then
@@ -7582,6 +7707,7 @@ UIControls.SetupSheriffEngine = function()
         action.Parent = root
         Corner(action, 14)
         Stroke(action, Color3.fromRGB(67, 102, 143), 0.18, 1)
+        UIControls[controlKey .. "Action"] = action
 
         local lockButton = New("TextButton", {
             Name = "Lock",
@@ -7707,14 +7833,30 @@ UIControls.SetupSheriffEngine = function()
         if not UserInputService.TouchEnabled then return end
 
         local role = UIControls.LastCombatRole or "Unknown"
-        local sheriffVisible = role == "Sheriff" or role == "Hero"
+        local getGunVisible = Config.GetGunEnabled and role == "Innocent"
+        local shootVisible = Config.ShootMurdererEnabled
+            and (role == "Sheriff" or role == "Hero")
 
         if UIControls.GetGunMobileRoot then
-            UIControls.GetGunMobileRoot.Visible = sheriffVisible
+            UIControls.GetGunMobileRoot.Visible = getGunVisible
+        end
+
+        if UIControls.GetGunMobileRootAction then
+            UIControls.GetGunMobileRootAction.BackgroundColor3 = getGunVisible
+                and Color3.fromRGB(66, 125, 198)
+                or Color3.fromRGB(38, 61, 91)
+            UIControls.GetGunMobileRootAction.BackgroundTransparency = getGunVisible and 0.02 or 0.18
         end
 
         if UIControls.ShootMurdererMobileRoot then
-            UIControls.ShootMurdererMobileRoot.Visible = sheriffVisible
+            UIControls.ShootMurdererMobileRoot.Visible = shootVisible
+        end
+
+        if UIControls.ShootMurdererMobileRootAction then
+            UIControls.ShootMurdererMobileRootAction.BackgroundColor3 = shootVisible
+                and Color3.fromRGB(64, 112, 171)
+                or Color3.fromRGB(38, 61, 91)
+            UIControls.ShootMurdererMobileRootAction.BackgroundTransparency = shootVisible and 0.02 or 0.18
         end
 
         if UIControls.ThrowKnifeMobileRoot then

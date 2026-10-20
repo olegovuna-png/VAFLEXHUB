@@ -79,7 +79,7 @@ local Config = {
     SpinMode = "Clockwise",
     NoclipEnabled = false,
     CoinFarmEnabled = false,
-    CoinFarmSpeed = 22,
+    CoinFarmSpeed = 30,
     AntiFlingEnabled = false,
     DesyncAntiAimEnabled = false,
 
@@ -89,6 +89,7 @@ local Config = {
     -- Sheriff / Hero
     GetGunEnabled = false,
     ShootMurdererEnabled = false,
+    WallTargetingEnabled = false,
 
     -- Small on-screen list of currently enabled functions
     FunctionsHUDEnabled = false,
@@ -2234,6 +2235,41 @@ UIControls.SetupCombatPage = function()
         UIControls.GetGunButton = getGun
         UIControls.ShootMurdererButton = shootMurderer
         UIControls.SheriffStatus = sheriffStatus
+
+        local wallRow = New("Frame", {
+            Name = "WallTargetingRow",
+            Position = UDim2.fromOffset(0, 226),
+            Size = UDim2.new(1, 0, 0, 46),
+            BackgroundColor3 = Config.Panel2,
+            BackgroundTransparency = 0.05,
+            BorderSizePixel = 0,
+            ZIndex = 106,
+        })
+        wallRow.Parent = sheriffPage
+        Corner(wallRow, 11)
+        Stroke(wallRow, Config.Border, 0.12, 1)
+
+        local wallTitle = New("TextLabel", {
+            Position = UDim2.fromOffset(13, 0),
+            Size = UDim2.new(1, -88, 1, 0),
+            BackgroundTransparency = 1,
+            Text = "Wall Targeting",
+            TextColor3 = Config.Text,
+            TextSize = 10,
+            Font = Enum.Font.GothamSemibold,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 107,
+        })
+        wallTitle.Parent = wallRow
+
+        UIControls.WallTargetingSwitch = CreateSwitch(
+            wallRow,
+            UDim2.new(1, -9, 0.5, 0),
+            Config.WallTargetingEnabled,
+            function(value)
+                Config.WallTargetingEnabled = value
+            end
+        )
     end
 
     local universalScroll = New("ScrollingFrame", {
@@ -3541,7 +3577,7 @@ local function SetupMovementPage()
     local SpeedSection, SpeedHeader, SpeedArrow, SpeedBody = MakeSection(MovementStack, "Speedhack", 1)
     local WalkSection, WalkHeader, WalkArrow, WalkBody = MakeSection(MovementStack, "Walkhack", 2)
     local AirSection, AirHeader, AirArrow, AirBody = MakeSection(MovementStack, "Airhack", 3)
-    local CoinSection, CoinHeader, CoinArrow, CoinBody = MakeSection(MovementStack, "Auto Coin Farm", 4)
+    local CoinSection, CoinHeader, CoinArrow, CoinBody = MakeSection(MovementStack, "Auto Candy Farm", 4)
 
     local SpeedExpanded = false
     local WalkExpanded = false
@@ -3930,35 +3966,327 @@ local function SetupMovementPage()
     end
 
 
-    -- Auto Coin Farm: source-style engine from the provided script.
-    -- Kept isolated from manual Fly/Noclip. No bag-full kill/reset logic.
+    -- Auto Candy Farm:
+    -- map-aware, low-scan nearest collectible tracker with smooth PivotTo movement.
+    -- It pauses in lobby/death, stops on a full bag, and resumes next round.
     local CoinFarm = {
-        MAX_DIST = 1000,
-        ActiveCoins = setmetatable({}, { __mode = "k" }),
-        BlacklistedCoins = setmetatable({}, { __mode = "k" }),
-        CurrentTarget = nil,
         Enabled = false,
-        WaitingForCoins = false,
-        TargetFinderThread = nil,
-        HeartbeatConnection = nil,
-        NoclipConnection = nil,
-        CoinAddedConnection = nil,
-        CoinRemovedConnection = nil,
-        CoinsStartedConnection = nil,
+        WaitingForMap = false,
+        FullBag = false,
+
+        CurrentMap = nil,
+        CoinContainer = nil,
+        CurrentTarget = nil,
+        StartPivot = nil,
+
+        ActiveCoins = setmetatable({}, { __mode = "k" }),
+        TouchedCoins = setmetatable({}, { __mode = "k" }),
+        RetryAfter = setmetatable({}, { __mode = "k" }),
+
         CharacterParts = {},
         CollisionRestore = setmetatable({}, { __mode = "k" }),
-        HumanoidStatesRestore = nil,
-        PreviousFly = false,
-        OwnsFly = false,
+
+        MoveConnection = nil,
+        NoclipConnection = nil,
+        AddedConnection = nil,
+        RemovingConnection = nil,
+        CoinsStartedConnection = nil,
+        CharacterAddedConnection = nil,
+
+        LastContainerScan = 0,
+        LastTargetScan = 0,
+        LastBagScan = 0,
+        LastProgressAt = 0,
+        LastTargetDistance = math.huge,
+
+        MAX_DISTANCE = 2500,
+        CONTAINER_SCAN_INTERVAL = 0.60,
+        TARGET_SCAN_INTERVAL = 0.08,
+        BAG_SCAN_INTERVAL = 0.15,
+        TOUCH_DISTANCE = 1.35,
+        STUCK_SECONDS = 1.75,
     }
+
+    CoinFarm.GetCharacter = function()
+        local character = LocalPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+
+        if not character or not humanoid or humanoid.Health <= 0 or not root or not root.Parent then
+            return nil, nil, nil
+        end
+
+        return character, humanoid, root
+    end
+
+    CoinFarm.IsBagFull = function()
+        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        local mainGui = playerGui and playerGui:FindFirstChild("MainGUI")
+        local gameGui = mainGui and mainGui:FindFirstChild("Game")
+        local coinBags = gameGui and gameGui:FindFirstChild("CoinBags")
+        local container = coinBags and coinBags:FindFirstChild("Container")
+
+        if not container then
+            return false
+        end
+
+        for _, object in ipairs(container:GetDescendants()) do
+            if object.Name == "FullBagIcon" and object:IsA("GuiObject") and object.Visible then
+                return true
+            end
+        end
+
+        return false
+    end
+
+    CoinFarm.GetTouchHelper = function()
+        local helper = nil
+
+        pcall(function()
+            if type(getgenv) == "function" then
+                helper = getgenv()["firetouchinterest"]
+            end
+        end)
+
+        if type(helper) ~= "function" then
+            pcall(function()
+                if type(getfenv) == "function" then
+                    helper = getfenv()["firetouchinterest"]
+                end
+            end)
+        end
+
+        if type(helper) ~= "function" then
+            pcall(function()
+                helper = _G["firetouchinterest"]
+            end)
+        end
+
+        return type(helper) == "function" and helper or nil
+    end
+
+    CoinFarm.FindTouchPart = function(object)
+        if not object then return nil end
+
+        if object:IsA("TouchTransmitter") then
+            local parent = object.Parent
+            return parent and parent:IsA("BasePart") and parent or nil
+        end
+
+        if object:IsA("BasePart") then
+            if object:FindFirstChildWhichIsA("TouchTransmitter") then
+                return object
+            end
+
+            local name = string.lower(object.Name)
+            local namedCollectible =
+                string.find(name, "coin", 1, true)
+                or string.find(name, "candy", 1, true)
+                or string.find(name, "token", 1, true)
+                or string.find(name, "snow", 1, true)
+
+            if namedCollectible and object:FindFirstChild("CoinVisual") then
+                return object
+            end
+        end
+
+        return nil
+    end
+
+    CoinFarm.IsUsableCoin = function(part)
+        if not part or not part:IsA("BasePart") or not part.Parent then
+            return false
+        end
+
+        if CoinFarm.TouchedCoins[part] then
+            return false
+        end
+
+        local retry = CoinFarm.RetryAfter[part]
+        if retry and retry > os.clock() then
+            return false
+        end
+
+        local container = CoinFarm.CoinContainer
+        if container and not part:IsDescendantOf(container) then
+            return false
+        end
+
+        local touch = part:FindFirstChildWhichIsA("TouchTransmitter")
+        local visual = part:FindFirstChild("CoinVisual")
+
+        if touch or visual then
+            return true
+        end
+
+        local name = string.lower(part.Name)
+        return string.find(name, "coin", 1, true) ~= nil
+            or string.find(name, "candy", 1, true) ~= nil
+            or string.find(name, "token", 1, true) ~= nil
+    end
+
+    CoinFarm.CountCollectibles = function(container)
+        local count = 0
+
+        for _, object in ipairs(container:GetDescendants()) do
+            if object:IsA("TouchTransmitter") then
+                local parent = object.Parent
+                if parent and parent:IsA("BasePart") then
+                    count += 1
+                end
+            end
+        end
+
+        return count
+    end
+
+    CoinFarm.FindBestContainer = function()
+        local best = nil
+        local bestCount = 0
+
+        for _, object in ipairs(workspace:GetDescendants()) do
+            if (object:IsA("Model") or object:IsA("Folder"))
+                and string.lower(object.Name) == "coincontainer" then
+
+                local count = CoinFarm.CountCollectibles(object)
+                if count > bestCount then
+                    best = object
+                    bestCount = count
+                elseif not best and count == 0 then
+                    best = object
+                end
+            end
+        end
+
+        return best, bestCount
+    end
+
+    CoinFarm.DisconnectContainerListeners = function()
+        if CoinFarm.AddedConnection then
+            CoinFarm.AddedConnection:Disconnect()
+            CoinFarm.AddedConnection = nil
+        end
+
+        if CoinFarm.RemovingConnection then
+            CoinFarm.RemovingConnection:Disconnect()
+            CoinFarm.RemovingConnection = nil
+        end
+    end
+
+    CoinFarm.ClearCoins = function()
+        table.clear(CoinFarm.ActiveCoins)
+        table.clear(CoinFarm.TouchedCoins)
+        table.clear(CoinFarm.RetryAfter)
+        CoinFarm.CurrentTarget = nil
+        CoinFarm.LastTargetDistance = math.huge
+        CoinFarm.LastProgressAt = os.clock()
+    end
+
+    CoinFarm.Track = function(object)
+        local part = CoinFarm.FindTouchPart(object)
+        if part and CoinFarm.IsUsableCoin(part) then
+            CoinFarm.ActiveCoins[part] = true
+        end
+    end
+
+    CoinFarm.Rebuild = function()
+        table.clear(CoinFarm.ActiveCoins)
+
+        local container = CoinFarm.CoinContainer
+        if not container or not container.Parent then
+            return
+        end
+
+        for _, object in ipairs(container:GetDescendants()) do
+            CoinFarm.Track(object)
+        end
+    end
+
+    CoinFarm.BindContainer = function(container)
+        if CoinFarm.CoinContainer == container and container and container.Parent then
+            return
+        end
+
+        CoinFarm.DisconnectContainerListeners()
+        CoinFarm.ClearCoins()
+
+        CoinFarm.CoinContainer = container
+        CoinFarm.CurrentMap = container and container.Parent or nil
+
+        local character = LocalPlayer.Character
+        if character then
+            pcall(function()
+                CoinFarm.StartPivot = character:GetPivot()
+            end)
+        end
+
+        if not container then
+            return
+        end
+
+        CoinFarm.Rebuild()
+
+        CoinFarm.AddedConnection = container.DescendantAdded:Connect(function(object)
+            if CoinFarm.Enabled then
+                CoinFarm.Track(object)
+            end
+        end)
+
+        CoinFarm.RemovingConnection = container.DescendantRemoving:Connect(function(object)
+            local part = CoinFarm.FindTouchPart(object)
+
+            if object:IsA("TouchTransmitter") then
+                part = object.Parent
+            end
+
+            if part and part:IsA("BasePart") then
+                CoinFarm.TouchedCoins[part] = true
+                CoinFarm.ActiveCoins[part] = nil
+
+                if CoinFarm.CurrentTarget == part then
+                    CoinFarm.CurrentTarget = nil
+                end
+            end
+        end)
+    end
+
+    CoinFarm.RefreshContainer = function(force)
+        local now = os.clock()
+
+        if not force
+            and CoinFarm.CoinContainer
+            and CoinFarm.CoinContainer.Parent
+            and now - CoinFarm.LastContainerScan < CoinFarm.CONTAINER_SCAN_INTERVAL then
+            return true
+        end
+
+        if not force and now - CoinFarm.LastContainerScan < CoinFarm.CONTAINER_SCAN_INTERVAL then
+            return CoinFarm.CoinContainer ~= nil
+        end
+
+        CoinFarm.LastContainerScan = now
+
+        local container, count = CoinFarm.FindBestContainer()
+
+        if container ~= CoinFarm.CoinContainer then
+            CoinFarm.BindContainer(container)
+        elseif container and count > 0 and next(CoinFarm.ActiveCoins) == nil then
+            CoinFarm.Rebuild()
+        end
+
+        CoinFarm.WaitingForMap = not container or count <= 0
+        return not CoinFarm.WaitingForMap
+    end
 
     CoinFarm.UpdateCharacterParts = function()
         table.clear(CoinFarm.CharacterParts)
+
         local character = LocalPlayer.Character
         if not character then return end
-        for _, part in ipairs(character:GetChildren()) do
-            if part:IsA("BasePart") then
-                table.insert(CoinFarm.CharacterParts, part)
+
+        for _, object in ipairs(character:GetDescendants()) do
+            if object:IsA("BasePart") then
+                table.insert(CoinFarm.CharacterParts, object)
             end
         end
     end
@@ -3971,21 +4299,43 @@ local function SetupMovementPage()
                 end)
             end
         end
+
         table.clear(CoinFarm.CollisionRestore)
     end
 
-    CoinFarm.RestoreHumanoidStates = function()
-        local humanoid = MovementState.Humanoid
-        local saved = CoinFarm.HumanoidStatesRestore
-        if humanoid and humanoid.Parent and saved then
-            pcall(function()
-                humanoid:SetStateEnabled(Enum.HumanoidStateType.Climbing, saved.Climbing)
-                humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, saved.FallingDown)
-                humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, saved.Ragdoll)
-                humanoid:SetStateEnabled(Enum.HumanoidStateType.Physics, saved.Physics)
-            end)
+    CoinFarm.StartNoclip = function()
+        if CoinFarm.NoclipConnection then
+            CoinFarm.NoclipConnection:Disconnect()
+            CoinFarm.NoclipConnection = nil
         end
-        CoinFarm.HumanoidStatesRestore = nil
+
+        CoinFarm.RestoreCollision()
+        CoinFarm.UpdateCharacterParts()
+
+        CoinFarm.NoclipConnection = RunService.Stepped:Connect(function()
+            if not CoinFarm.Enabled or not Config.CoinFarmEnabled then
+                return
+            end
+
+            local _, humanoid = CoinFarm.GetCharacter()
+            if not humanoid then
+                return
+            end
+
+            for i = 1, #CoinFarm.CharacterParts do
+                local part = CoinFarm.CharacterParts[i]
+
+                if part and part.Parent then
+                    if CoinFarm.CollisionRestore[part] == nil then
+                        CoinFarm.CollisionRestore[part] = part.CanCollide
+                    end
+
+                    if part.CanCollide then
+                        part.CanCollide = false
+                    end
+                end
+            end
+        end)
     end
 
     CoinFarm.StopNoclip = function()
@@ -3995,341 +4345,324 @@ local function SetupMovementPage()
         end
 
         CoinFarm.RestoreCollision()
-        CoinFarm.RestoreHumanoidStates()
-
-        local humanoid = MovementState.Humanoid
-        local root = MovementState.Root
-        if humanoid and humanoid.Parent and humanoid.Health > 0 then
-            pcall(function()
-                if root and root.Parent then
-                    root.AssemblyAngularVelocity = Vector3.zero
-                end
-                if humanoid.FloorMaterial == Enum.Material.Air then
-                    humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
-                else
-                    humanoid:ChangeState(Enum.HumanoidStateType.Running)
-                end
-            end)
-        end
     end
 
-    CoinFarm.StartNoclip = function()
-        CoinFarm.StopNoclip()
-        CoinFarm.UpdateCharacterParts()
+    CoinFarm.FindNearest = function(root)
+        local best = nil
+        local bestDistance = CoinFarm.MAX_DISTANCE + 1
+        local now = os.clock()
 
-        local humanoid = MovementState.Humanoid
-        if humanoid and humanoid.Parent then
-            CoinFarm.HumanoidStatesRestore = {
-                Climbing = humanoid:GetStateEnabled(Enum.HumanoidStateType.Climbing),
-                FallingDown = humanoid:GetStateEnabled(Enum.HumanoidStateType.FallingDown),
-                Ragdoll = humanoid:GetStateEnabled(Enum.HumanoidStateType.Ragdoll),
-                Physics = humanoid:GetStateEnabled(Enum.HumanoidStateType.Physics),
-            }
+        for part in pairs(CoinFarm.ActiveCoins) do
+            if CoinFarm.IsUsableCoin(part) then
+                local distance = (part.Position - root.Position).Magnitude
 
-            pcall(function()
-                humanoid:SetStateEnabled(Enum.HumanoidStateType.Climbing, false)
-                humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
-                humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
-                humanoid:SetStateEnabled(Enum.HumanoidStateType.Physics, false)
-            end)
-        end
-
-        CoinFarm.NoclipConnection = RunService.Stepped:Connect(function()
-            if not CoinFarm.Enabled or not Config.CoinFarmEnabled or CoinFarm.WaitingForCoins then return end
-            local currentHumanoid = MovementState.Humanoid
-            if not currentHumanoid or currentHumanoid.Health <= 0 then return end
-
-            for i = 1, #CoinFarm.CharacterParts do
-                local part = CoinFarm.CharacterParts[i]
-                if part and part.Parent then
-                    if CoinFarm.CollisionRestore[part] == nil then
-                        CoinFarm.CollisionRestore[part] = part.CanCollide
-                    end
-                    if part.CanCollide then
-                        part.CanCollide = false
-                    end
+                if distance == distance and distance < bestDistance then
+                    best = part
+                    bestDistance = distance
+                end
+            else
+                local retry = CoinFarm.RetryAfter[part]
+                if not retry or retry <= now then
+                    CoinFarm.ActiveCoins[part] = nil
                 end
             end
-        end)
-    end
-
-    CoinFarm.IsCoin = function(part)
-        if not part or not part:IsA("BasePart") or CoinFarm.BlacklistedCoins[part] then
-            return false
         end
-        local name = string.lower(part.Name)
-        return string.find(name, "coin", 1, true) ~= nil
-            or string.find(name, "cash", 1, true) ~= nil
-            or string.find(name, "money", 1, true) ~= nil
-            or string.find(name, "collect", 1, true) ~= nil
+
+        return best, bestDistance
     end
 
-    CoinFarm.TrackCoin = function(part)
-        if CoinFarm.IsCoin(part) then
-            CoinFarm.ActiveCoins[part] = true
+    CoinFarm.TouchTarget = function(root, part)
+        if not part or not part.Parent then
+            return
         end
-    end
 
-    CoinFarm.UntrackCoin = function(part)
+        local helper = CoinFarm.GetTouchHelper()
+
+        if helper then
+            pcall(function()
+                helper(root, part, 0)
+                helper(root, part, 1)
+            end)
+        end
+
+        CoinFarm.TouchedCoins[part] = true
         CoinFarm.ActiveCoins[part] = nil
+
         if CoinFarm.CurrentTarget == part then
             CoinFarm.CurrentTarget = nil
         end
     end
 
-    CoinFarm.RebuildCoins = function()
-        table.clear(CoinFarm.ActiveCoins)
-        for _, object in ipairs(workspace:GetDescendants()) do
-            if CoinFarm.IsCoin(object) then
-                CoinFarm.ActiveCoins[object] = true
-            end
-        end
-    end
+    CoinFarm.ReturnToStart = function()
+        local character, humanoid, root = CoinFarm.GetCharacter()
+        local pivot = CoinFarm.StartPivot
 
-    CoinFarm.SetupVelocity = function()
-        local root = MovementState.Root
-        if not root or not root.Parent then return nil end
-
-        local attachment = MovementState.CoinFarmAttachment
-        if not attachment or not attachment.Parent then
-            attachment = root:FindFirstChild("FarmAttachment")
-            if not attachment then
-                attachment = Instance.new("Attachment")
-                attachment.Name = "FarmAttachment"
-                attachment.Parent = root
-            end
-            MovementState.CoinFarmAttachment = attachment
+        if not character or not humanoid or not root or typeof(pivot) ~= "CFrame" then
+            return
         end
 
-        local velocity = MovementState.CoinFarmVelocity
-        if not velocity or not velocity.Parent then
-            velocity = root:FindFirstChild("FarmLinearVelocity")
-            if not velocity then
-                velocity = Instance.new("LinearVelocity")
-                velocity.Name = "FarmLinearVelocity"
-                velocity.Attachment0 = attachment
-                velocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
-                velocity.RelativeTo = Enum.ActuatorRelativeTo.World
-                velocity.VectorVelocity = Vector3.zero
-                velocity.Enabled = false
-                velocity.ForceLimitMode = Enum.ForceLimitMode.PerAxis
-                velocity.MaxAxesForce = Vector3.new(100000, 100000, 100000)
-                velocity.Parent = root
-            else
-                velocity.Attachment0 = attachment
-            end
-            MovementState.CoinFarmVelocity = velocity
-        end
-
-        return velocity
-    end
-
-    CoinFarm.StopMovement = function()
-        local velocity = MovementState.CoinFarmVelocity
-        if velocity and velocity.Parent then
-            velocity.VectorVelocity = Vector3.zero
-            velocity.Enabled = false
-        end
-
-        local root = MovementState.Root
-        if root and root.Parent then
+        pcall(function()
             root.AssemblyLinearVelocity = Vector3.zero
             root.AssemblyAngularVelocity = Vector3.zero
-        end
+            character:PivotTo(pivot)
+        end)
     end
 
-    CoinFarm.RemoveVelocity = function()
-        if MovementState.CoinFarmVelocity then
+    CoinFarm.StopMotion = function()
+        local _, _, root = CoinFarm.GetCharacter()
+
+        if root then
             pcall(function()
-                MovementState.CoinFarmVelocity.VectorVelocity = Vector3.zero
-                MovementState.CoinFarmVelocity.Enabled = false
-                MovementState.CoinFarmVelocity:Destroy()
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
             end)
-            MovementState.CoinFarmVelocity = nil
-        end
-        if MovementState.CoinFarmAttachment then
-            pcall(function() MovementState.CoinFarmAttachment:Destroy() end)
-            MovementState.CoinFarmAttachment = nil
         end
     end
 
-    CoinFarm.FindNearest = function()
-        local root = MovementState.Root
-        if not root or not root.Parent then return nil end
+    CoinFarm.Step = function(dt)
+        if not CoinFarm.Enabled or not Config.CoinFarmEnabled then
+            return
+        end
 
-        local rootPos = root.Position
-        local nearest = nil
-        local nearestDist = CoinFarm.MAX_DIST + 1
+        local character, humanoid, root = CoinFarm.GetCharacter()
 
-        for coin in pairs(CoinFarm.ActiveCoins) do
-            if coin and coin.Parent and not CoinFarm.BlacklistedCoins[coin] then
-                local delta = coin.Position - rootPos
-                local dist = delta.Magnitude
-                if dist == dist and dist < nearestDist then
-                    nearestDist = dist
-                    nearest = coin
-                end
-            else
-                CoinFarm.ActiveCoins[coin] = nil
+        if not character or not humanoid or not root then
+            CoinFarm.CurrentTarget = nil
+            return
+        end
+
+        local now = os.clock()
+
+        if now - CoinFarm.LastBagScan >= CoinFarm.BAG_SCAN_INTERVAL then
+            CoinFarm.LastBagScan = now
+            local full = CoinFarm.IsBagFull()
+
+            if full and not CoinFarm.FullBag then
+                CoinFarm.FullBag = true
+                CoinFarm.CurrentTarget = nil
+                CoinFarm.StopMotion()
+                CoinFarm.ReturnToStart()
+            elseif not full and CoinFarm.FullBag then
+                CoinFarm.FullBag = false
+                CoinFarm.CurrentTarget = nil
+                CoinFarm.ClearCoins()
+                CoinFarm.RefreshContainer(true)
             end
         end
 
-        -- Same rule as the provided farmer: a live target needs CoinVisual.
-        if nearest and not nearest:FindFirstChild("CoinVisual") then
-            CoinFarm.ActiveCoins[nearest] = nil
-            nearest = nil
+        if CoinFarm.FullBag then
+            CoinFarm.StopMotion()
+            return
         end
 
-        return nearest
+        if not CoinFarm.RefreshContainer(false) then
+            CoinFarm.CurrentTarget = nil
+            CoinFarm.StopMotion()
+            return
+        end
+
+        if now - CoinFarm.LastTargetScan >= CoinFarm.TARGET_SCAN_INTERVAL then
+            CoinFarm.LastTargetScan = now
+
+            if not CoinFarm.CurrentTarget or not CoinFarm.IsUsableCoin(CoinFarm.CurrentTarget) then
+                CoinFarm.CurrentTarget = CoinFarm.FindNearest(root)
+                CoinFarm.LastTargetDistance = math.huge
+                CoinFarm.LastProgressAt = now
+            end
+        end
+
+        local target = CoinFarm.CurrentTarget
+
+        if not target or not CoinFarm.IsUsableCoin(target) then
+            CoinFarm.CurrentTarget = nil
+            CoinFarm.StopMotion()
+            return
+        end
+
+        local targetPosition = target.Position
+        local offset = targetPosition - root.Position
+        local distance = offset.Magnitude
+
+        if distance ~= distance then
+            CoinFarm.RetryAfter[target] = now + 0.8
+            CoinFarm.CurrentTarget = nil
+            return
+        end
+
+        if distance <= CoinFarm.TOUCH_DISTANCE then
+            local current = character:GetPivot()
+            local rotation = current - current.Position
+
+            pcall(function()
+                character:PivotTo(CFrame.new(targetPosition) * rotation)
+            end)
+
+            CoinFarm.TouchTarget(root, target)
+            CoinFarm.LastProgressAt = now
+            CoinFarm.LastTargetDistance = math.huge
+            return
+        end
+
+        if distance + 0.10 < CoinFarm.LastTargetDistance then
+            CoinFarm.LastTargetDistance = distance
+            CoinFarm.LastProgressAt = now
+        elseif now - CoinFarm.LastProgressAt >= CoinFarm.STUCK_SECONDS then
+            CoinFarm.RetryAfter[target] = now + 1.0
+            CoinFarm.ActiveCoins[target] = nil
+            CoinFarm.CurrentTarget = nil
+            CoinFarm.LastTargetDistance = math.huge
+            CoinFarm.LastProgressAt = now
+            return
+        end
+
+        local speed = math.clamp(tonumber(Config.CoinFarmSpeed) or 30, 1, 100)
+        local stepDistance = math.min(distance, speed * math.max(dt, 1 / 240))
+        local nextPosition = root.Position + offset.Unit * stepDistance
+
+        local pivot = character:GetPivot()
+        local rotation = pivot - pivot.Position
+
+        pcall(function()
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            character:PivotTo(CFrame.new(nextPosition) * rotation)
+        end)
     end
 
     CoinFarm.StopConnections = function()
-        if CoinFarm.HeartbeatConnection then CoinFarm.HeartbeatConnection:Disconnect() CoinFarm.HeartbeatConnection = nil end
-        if CoinFarm.NoclipConnection then CoinFarm.NoclipConnection:Disconnect() CoinFarm.NoclipConnection = nil end
-        if CoinFarm.CoinAddedConnection then CoinFarm.CoinAddedConnection:Disconnect() CoinFarm.CoinAddedConnection = nil end
-        if CoinFarm.CoinRemovedConnection then CoinFarm.CoinRemovedConnection:Disconnect() CoinFarm.CoinRemovedConnection = nil end
-        if CoinFarm.CoinsStartedConnection then CoinFarm.CoinsStartedConnection:Disconnect() CoinFarm.CoinsStartedConnection = nil end
-    end
-
-    CoinFarm.StopTargetFinder = function()
-        if CoinFarm.TargetFinderThread then
-            pcall(task.cancel, CoinFarm.TargetFinderThread)
-            CoinFarm.TargetFinderThread = nil
+        if CoinFarm.MoveConnection then
+            CoinFarm.MoveConnection:Disconnect()
+            CoinFarm.MoveConnection = nil
         end
+
+        if CoinFarm.CoinsStartedConnection then
+            CoinFarm.CoinsStartedConnection:Disconnect()
+            CoinFarm.CoinsStartedConnection = nil
+        end
+
+        if CoinFarm.CharacterAddedConnection then
+            CoinFarm.CharacterAddedConnection:Disconnect()
+            CoinFarm.CharacterAddedConnection = nil
+        end
+
+        CoinFarm.DisconnectContainerListeners()
     end
 
-    CoinFarm.StartTargetFinder = function()
-        CoinFarm.StopTargetFinder()
-        CoinFarm.TargetFinderThread = task.spawn(function()
-            while CoinFarm.Enabled and Config.CoinFarmEnabled do
-                task.wait(0.1)
-                if not CoinFarm.Enabled or not Config.CoinFarmEnabled then break end
-
-                local humanoid = MovementState.Humanoid
-                local root = MovementState.Root
-                if not CoinFarm.WaitingForCoins and humanoid and humanoid.Health > 0 and root and root.Parent then
-                    CoinFarm.CurrentTarget = CoinFarm.FindNearest()
-                end
-            end
-        end)
-    end
-
-    CoinFarm.StartListeners = function()
-        if CoinFarm.CoinAddedConnection then CoinFarm.CoinAddedConnection:Disconnect() end
-        if CoinFarm.CoinRemovedConnection then CoinFarm.CoinRemovedConnection:Disconnect() end
-        if CoinFarm.CoinsStartedConnection then CoinFarm.CoinsStartedConnection:Disconnect() end
-
-        CoinFarm.CoinAddedConnection = workspace.DescendantAdded:Connect(function(object)
-            CoinFarm.TrackCoin(object)
-        end)
-
-        CoinFarm.CoinRemovedConnection = workspace.DescendantRemoving:Connect(function(object)
-            CoinFarm.UntrackCoin(object)
-        end)
+    CoinFarm.BindRoundEvents = function()
+        if CoinFarm.CoinsStartedConnection then
+            CoinFarm.CoinsStartedConnection:Disconnect()
+            CoinFarm.CoinsStartedConnection = nil
+        end
 
         local remotes = ReplicatedStorage:FindFirstChild("Remotes")
         local gameplay = remotes and remotes:FindFirstChild("Gameplay")
         local coinsStarted = gameplay and gameplay:FindFirstChild("CoinsStarted")
+
         if coinsStarted and coinsStarted:IsA("RemoteEvent") then
             CoinFarm.CoinsStartedConnection = coinsStarted.OnClientEvent:Connect(function()
-                CoinFarm.WaitingForCoins = true
-                CoinFarm.StopMovement()
-                CoinFarm.CurrentTarget = nil
-                table.clear(CoinFarm.ActiveCoins)
-                table.clear(CoinFarm.BlacklistedCoins)
+                if not CoinFarm.Enabled then return end
 
-                task.delay(1.5, function()
+                CoinFarm.FullBag = false
+                CoinFarm.WaitingForMap = true
+                CoinFarm.CurrentTarget = nil
+                CoinFarm.ClearCoins()
+
+                task.delay(0.70, function()
                     if CoinFarm.Enabled and Config.CoinFarmEnabled then
-                        CoinFarm.RebuildCoins()
-                        CoinFarm.WaitingForCoins = false
+                        CoinFarm.RefreshContainer(true)
                     end
                 end)
             end)
         end
     end
 
-    CoinFarm.StartMovement = function()
-        if CoinFarm.HeartbeatConnection then CoinFarm.HeartbeatConnection:Disconnect() end
-        CoinFarm.SetupVelocity()
+    CoinFarm.Start = function()
+        if CoinFarm.Enabled then
+            return
+        end
 
-        CoinFarm.HeartbeatConnection = RunService.Heartbeat:Connect(function()
-            if not CoinFarm.Enabled or not Config.CoinFarmEnabled or CoinFarm.WaitingForCoins then
-                CoinFarm.StopMovement()
+        local character, humanoid, root = CoinFarm.GetCharacter()
+        if not character or not humanoid or not root then
+            return
+        end
+
+        MovementState.Humanoid = humanoid
+        MovementState.Root = root
+
+        CoinFarm.Enabled = true
+        CoinFarm.FullBag = false
+        CoinFarm.WaitingForMap = true
+        CoinFarm.LastContainerScan = 0
+        CoinFarm.LastTargetScan = 0
+        CoinFarm.LastBagScan = 0
+        CoinFarm.LastProgressAt = os.clock()
+        CoinFarm.LastTargetDistance = math.huge
+
+        pcall(function()
+            CoinFarm.StartPivot = character:GetPivot()
+        end)
+
+        CoinFarm.RefreshContainer(true)
+        CoinFarm.StartNoclip()
+        CoinFarm.BindRoundEvents()
+
+        CoinFarm.CharacterAddedConnection = LocalPlayer.CharacterAdded:Connect(function(newCharacter)
+            if not CoinFarm.Enabled or not Config.CoinFarmEnabled then
                 return
             end
 
-            local humanoid = MovementState.Humanoid
-            local root = MovementState.Root
-            if not humanoid or humanoid.Health <= 0 or not root or not root.Parent then
-                CoinFarm.StopMovement()
-                return
-            end
+            CoinFarm.CurrentTarget = nil
+            CoinFarm.FullBag = false
+            CoinFarm.WaitingForMap = true
+            CoinFarm.ClearCoins()
 
-            local target = CoinFarm.CurrentTarget
-            if target and target.Parent and not CoinFarm.BlacklistedCoins[target] then
-                local targetPos = target.Position
-                local rootPos = root.Position
-                local offset = targetPos - rootPos
-                local dist = offset.Magnitude
-
-                if dist == dist and dist <= 1.2 then
-                    -- This is the same short final snap used by the provided source.
-                    -- It is at most ~1.2 studs, not a map-scale teleport.
-                    pcall(function()
-                        root.CFrame = CFrame.new(targetPos)
-                    end)
-                    CoinFarm.StopMovement()
-
-                    CoinFarm.BlacklistedCoins[target] = true
-                    CoinFarm.ActiveCoins[target] = nil
-                    CoinFarm.CurrentTarget = nil
-                elseif dist == dist and dist > 0.001 then
-                    local velocity = CoinFarm.SetupVelocity()
-                    if velocity and velocity.Parent then
-                        velocity.Enabled = true
-                        velocity.VectorVelocity = offset.Unit * math.clamp(tonumber(Config.CoinFarmSpeed) or 23, 1, 100)
-                    end
-                else
-                    CoinFarm.StopMovement()
+            task.delay(1.0, function()
+                if not CoinFarm.Enabled or not Config.CoinFarmEnabled then
+                    return
                 end
-            else
-                CoinFarm.StopMovement()
-            end
+
+                local humanoid2 = newCharacter:FindFirstChildOfClass("Humanoid")
+                    or newCharacter:WaitForChild("Humanoid", 3)
+                local root2 = newCharacter:FindFirstChild("HumanoidRootPart")
+                    or newCharacter:WaitForChild("HumanoidRootPart", 3)
+
+                if humanoid2 and root2 then
+                    MovementState.Humanoid = humanoid2
+                    MovementState.Root = root2
+
+                    pcall(function()
+                        CoinFarm.StartPivot = newCharacter:GetPivot()
+                    end)
+
+                    CoinFarm.StartNoclip()
+                    CoinFarm.RefreshContainer(true)
+                end
+            end)
+        end)
+
+        CoinFarm.MoveConnection = RunService.Heartbeat:Connect(function(dt)
+            CoinFarm.Step(dt)
         end)
     end
 
     CoinFarm.Cleanup = function(preserveConfig)
         CoinFarm.Enabled = false
-        CoinFarm.WaitingForCoins = false
-        CoinFarm.StopTargetFinder()
-        CoinFarm.StopConnections()
-        CoinFarm.StopMovement()
-        CoinFarm.StopNoclip()
-        CoinFarm.RemoveVelocity()
+        CoinFarm.WaitingForMap = false
+        CoinFarm.FullBag = false
         CoinFarm.CurrentTarget = nil
-        table.clear(CoinFarm.ActiveCoins)
-        table.clear(CoinFarm.BlacklistedCoins)
+
+        CoinFarm.StopConnections()
+        CoinFarm.StopNoclip()
+        CoinFarm.StopMotion()
+        CoinFarm.ClearCoins()
+
+        CoinFarm.CoinContainer = nil
+        CoinFarm.CurrentMap = nil
+        CoinFarm.StartPivot = nil
 
         if not preserveConfig then
             Config.CoinFarmEnabled = false
         end
-    end
-
-    CoinFarm.Start = function()
-        if CoinFarm.Enabled then return end
-        local humanoid, root = GetCharacterParts()
-        if not humanoid or humanoid.Health <= 0 or not root then return end
-
-        MovementState.Humanoid = humanoid
-        MovementState.Root = root
-        CoinFarm.Enabled = true
-        CoinFarm.WaitingForCoins = false
-        CoinFarm.RebuildCoins()
-        CoinFarm.SetupVelocity()
-        CoinFarm.StartNoclip()
-        CoinFarm.StartListeners()
-        CoinFarm.StartTargetFinder()
-        CoinFarm.StartMovement()
     end
 
     CoinFarm.SetEnabled = function(value)
@@ -4340,12 +4673,15 @@ local function SetupMovementPage()
                 CoinFarm.PreviousFly = Config.FlyEnabled
                 CoinFarm.OwnsFly = true
             end
+
             Config.CoinFarmEnabled = true
 
-            -- Manual Fly and the farm LinearVelocity must never fight each other.
+            -- Do not let manual Fly compete with farm movement.
             if Config.FlyEnabled then
                 SetFlyEnabled(false)
-                if UIControls.FlySwitch then UIControls.FlySwitch:SetInstant(false, false) end
+                if UIControls.FlySwitch then
+                    UIControls.FlySwitch:SetInstant(false, false)
+                end
             end
 
             CoinFarm.Start()
@@ -4357,8 +4693,12 @@ local function SetupMovementPage()
                 local restoreFly = CoinFarm.PreviousFly == true
                 CoinFarm.OwnsFly = false
                 CoinFarm.PreviousFly = false
+
                 SetFlyEnabled(restoreFly)
-                if UIControls.FlySwitch then UIControls.FlySwitch:SetInstant(restoreFly, false) end
+
+                if UIControls.FlySwitch then
+                    UIControls.FlySwitch:SetInstant(restoreFly, false)
+                end
             end
         end
     end
@@ -4366,11 +4706,14 @@ local function SetupMovementPage()
     UIControls.CoinFarmCleanup = function()
         CoinFarm.Cleanup(true)
     end
+
     UIControls.CoinFarmRestart = function()
         if Config.CoinFarmEnabled then
+            CoinFarm.Cleanup(true)
             CoinFarm.Start()
         end
     end
+
     UIControls.ApplyCoinFarmState = CoinFarm.SetEnabled
 
     local SetCoinFarmEnabled = CoinFarm.SetEnabled
@@ -4673,8 +5016,8 @@ local function SetupMovementPage()
             Max = 200,
         },
         CoinFarm = {
-            Title = "Auto Coin Farm",
-            Sub = "Pathfinding movement speed",
+            Title = "Auto Candy Farm",
+            Sub = "Candy / token movement speed",
             Slider = "Speed",
             Key = "CoinFarmSpeed",
             Max = 100,
@@ -4936,7 +5279,7 @@ local function SetupMovementPage()
     )
 
     UIControls.CoinFarmSwitch = MakeMovementRow(
-        CoinBody, 0, "Auto Coin Farm", "Source engine • LinearVelocity + Noclip",
+        CoinBody, 0, "Auto Candy Farm", "Smart nearest • smooth movement • auto bag stop",
         Config.CoinFarmEnabled,
         SetCoinFarmEnabled,
         "CoinFarm"
@@ -4980,7 +5323,7 @@ local function SetupMovementPage()
         Config.SpinSpeed = math.clamp(math.floor((value or 35) + 0.5), 1, 200)
     end
     UIControls.SetCoinFarmSpeed = function(value)
-        Config.CoinFarmSpeed = math.clamp(math.floor((value or 22) + 0.5), 1, 100)
+        Config.CoinFarmSpeed = math.clamp(math.floor((value or 30) + 0.5), 1, 100)
     end
 
     if LocalPlayer.Character then
@@ -5053,7 +5396,7 @@ local function SetupMovementPage()
             MovementState.LastGroundedAt = os.clock()
         end
 
-        -- Auto Coin Farm runs in its own source-style Heartbeat engine.
+        -- Auto Candy Farm runs in its own Heartbeat movement engine.
 
         -- WalkSpeed
         if Config.WalkSpeedEnabled then
@@ -5143,7 +5486,7 @@ local function SetupMovementPage()
         end
 
         -- Fly: BodyVelocity + BodyGyro system for manual Fly only.
-        -- Auto Coin Farm uses its own LinearVelocity and suspends this controller.
+        -- Auto Candy Farm owns character movement while enabled.
         if Config.FlyEnabled then
             local camera = workspace.CurrentCamera
             local bv, bg = EnsureFlyControllers()
@@ -5307,12 +5650,13 @@ do
         SpinMode = "Clockwise",
         NoclipEnabled = false,
         CoinFarmEnabled = false,
-        CoinFarmSpeed = 22,
+        CoinFarmSpeed = 30,
         AntiFlingEnabled = false,
         DesyncAntiAimEnabled = false,
         ThrowKnifeEnabled = false,
         GetGunEnabled = false,
         ShootMurdererEnabled = false,
+        WallTargetingEnabled = false,
         FunctionsHUDEnabled = false,
     }
 
@@ -5351,6 +5695,7 @@ do
             ThrowKnifeEnabled = Config.ThrowKnifeEnabled,
             GetGunEnabled = Config.GetGunEnabled,
             ShootMurdererEnabled = Config.ShootMurdererEnabled,
+            WallTargetingEnabled = Config.WallTargetingEnabled,
             FunctionsHUDEnabled = Config.FunctionsHUDEnabled,
         }
     end
@@ -5387,12 +5732,13 @@ do
         Config.SpinMode = snapshot.SpinMode or "Clockwise"
         Config.NoclipEnabled = snapshot.NoclipEnabled == true
         Config.CoinFarmEnabled = snapshot.CoinFarmEnabled == true
-        Config.CoinFarmSpeed = math.clamp(snapshot.CoinFarmSpeed or 22, 1, 100)
+        Config.CoinFarmSpeed = math.clamp(snapshot.CoinFarmSpeed or 30, 1, 100)
         Config.AntiFlingEnabled = snapshot.AntiFlingEnabled == true
         Config.DesyncAntiAimEnabled = snapshot.DesyncAntiAimEnabled == true
         Config.ThrowKnifeEnabled = snapshot.ThrowKnifeEnabled == true
         Config.GetGunEnabled = snapshot.GetGunEnabled == true
         Config.ShootMurdererEnabled = snapshot.ShootMurdererEnabled == true
+        Config.WallTargetingEnabled = snapshot.WallTargetingEnabled == true
         Config.FunctionsHUDEnabled = snapshot.FunctionsHUDEnabled == true
 
         UIControls.RoleSwitch:SetInstant(Config.RoleESP, false)
@@ -5424,6 +5770,7 @@ do
         if UIControls.SetThrowKnifeEnabled then UIControls.SetThrowKnifeEnabled(Config.ThrowKnifeEnabled) end
         if UIControls.GetGunSwitch then UIControls.GetGunSwitch:SetInstant(Config.GetGunEnabled, false) end
         if UIControls.ShootMurdererSwitch then UIControls.ShootMurdererSwitch:SetInstant(Config.ShootMurdererEnabled, false) end
+        if UIControls.WallTargetingSwitch then UIControls.WallTargetingSwitch:SetInstant(Config.WallTargetingEnabled, false) end
         if UIControls.RefreshCombatMobileButtons then UIControls.RefreshCombatMobileButtons() end
         if UIControls.FunctionsHUDSwitch then UIControls.FunctionsHUDSwitch:SetInstant(Config.FunctionsHUDEnabled, false) end
         if UIControls.SetWalkSpeedValue then UIControls.SetWalkSpeedValue(Config.WalkSpeedValue) end
@@ -5978,12 +6325,13 @@ do
         if Config.AirStrafeEnabled then table.insert(names, "AirStrafe") end
         if Config.SpinEnabled then table.insert(names, "Spin  " .. tostring(Config.SpinSpeed) .. "  ·  " .. tostring(Config.SpinMode)) end
         if Config.NoclipEnabled then table.insert(names, "Noclip") end
-        if Config.CoinFarmEnabled then table.insert(names, "Coin Farm  " .. tostring(Config.CoinFarmSpeed)) end
+        if Config.CoinFarmEnabled then table.insert(names, "Candy Farm  " .. tostring(Config.CoinFarmSpeed)) end
         if Config.AntiFlingEnabled then table.insert(names, "Anti Fling") end
         if Config.DesyncAntiAimEnabled then table.insert(names, "Anti Aim") end
         if Config.ThrowKnifeEnabled then table.insert(names, "Throw a Knife") end
         if Config.GetGunEnabled then table.insert(names, "Get Gun") end
         if Config.ShootMurdererEnabled then table.insert(names, "Shoot Murderer") end
+        if Config.WallTargetingEnabled then table.insert(names, "Wall Targeting") end
         return names
     end
 
@@ -7582,6 +7930,33 @@ UIControls.SetupSheriffEngine = function()
         return predicted, predictTime
     end
 
+    local function hasLocalLineOfSight(targetCharacter, predictedPosition)
+        local character = LocalPlayer.Character
+        local gun = findGunTool()
+        local handle = gun and gun:FindFirstChild("Handle")
+        local originPart = handle or (character and character:FindFirstChild("Head"))
+        if not originPart then
+            return true
+        end
+
+        local delta = predictedPosition - originPart.Position
+        if delta.Magnitude < 0.05 then
+            return true
+        end
+
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = {character}
+        params.IgnoreWater = true
+
+        local hit = workspace:Raycast(originPart.Position, delta, params)
+        if not hit then
+            return true
+        end
+
+        return hit.Instance and hit.Instance:IsDescendantOf(targetCharacter)
+    end
+
     UIControls.ShootMurdererSilent = function()
         if not Config.ShootMurdererEnabled then
             setSheriffStatus("Enable Shoot Murderer first")
@@ -7643,6 +8018,16 @@ UIControls.SetupSheriffEngine = function()
             targetHumanoid
         )
 
+        local clearShot = hasLocalLineOfSight(
+            murderer.Character,
+            predictedPosition
+        )
+
+        if not clearShot and not Config.WallTargetingEnabled then
+            setSheriffStatus("Shot blocked by wall")
+            return false
+        end
+
         local originCFrame = CFrame.new(originPosition)
         local targetCFrame = CFrame.new(predictedPosition)
 
@@ -7659,9 +8044,11 @@ UIControls.SetupSheriffEngine = function()
         end)
 
         if ok then
+            local mode = clearShot and "CLEAR" or "WALL TARGET"
             setSheriffStatus(string.format(
-                "Shot -> %s • %.0f ms predict",
+                "Shot -> %s • %s • %.0f ms predict",
                 murderer.DisplayName,
+                mode,
                 predictTime * 1000
             ))
         else
